@@ -59,7 +59,7 @@ public:
         return params_;
     }
 
-        void init(std::vector<layer>& layers) {
+     void init(std::vector<layer>& layers) {
         for (int s = 0; s < state_W.size(); s++) {
             for (auto& l : layers) {
                 state_W[s].push_back(l.get_weights());
@@ -91,6 +91,10 @@ public:
         t++;
 
         for (int i = 0; i < layers.size(); i++) {
+            if (!layers[i].is_trainable()) {
+                continue; 
+            }
+            
             auto& W = layers[i].get_weights();
             auto& dW = layers[i].get_dw();
             auto& b = layers[i].get_bias();

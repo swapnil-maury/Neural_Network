@@ -1,6 +1,7 @@
 # Build outputs
 *.out
 *.exe
+output.h
 
 # Jupyter
 .ipynb_checkpoints/

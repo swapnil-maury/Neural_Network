@@ -21,7 +21,8 @@ struct ModelParams {
     std::vector<std::vector<std::vector<double>>> weights;
     std::vector<std::vector<double>> biases;
     std::vector<std::string> activations;
-    
+    std::vector<double> dropout_rates;
+
     std::string loss;
     std::string optimizer;
     std::vector<double> optimizer_params;
@@ -101,13 +102,39 @@ private:
         return nn::SGD(0.01);
     }
 
+    void set_training_mode(bool mode) {
+        for (auto& l : layers) {
+            l.set_training_mode(mode);
+        }
+    }
+
 public:
     SequentialNetwork(LossFunction loss_fn = losses::MSE(), Optimizer opt = nn::SGD(), int epochs = 100)
         : loss(std::move(loss_fn)), optimizer(std::move(opt)), epochs(epochs), batch_size(1), input_dim(-1) {}
 
-    void add_layer(layer l) { layers.push_back(std::move(l)); }
-    void add_layer(int in_dim, int out_dim, ActivationFunction act) { layers.push_back(layer(in_dim, out_dim, std::move(act))); }
+    void add_layer(layer l) { 
+        layers.push_back(std::move(l));
+        optimizer.set_initialized(false);
+    }
 
+    void add_layer(int in_dim, int out_dim, ActivationFunction act,double dropout_rate = 0.0) { 
+        layers.push_back(layer(in_dim, out_dim, std::move(act),dropout_rate));
+        optimizer.set_initialized(false); 
+    }
+
+    // Insert a layer at a specific index
+    void insert_layer(int index, int in_dim, int out_dim, ActivationFunction act, double drop_rate = 0.0) {
+        if (index < 0 || index > layers.size()) {
+            std::cerr << "Error: Invalid layer index!" << std::endl;
+            return;
+        }
+        
+        layers.insert(layers.begin() + index, layer(in_dim, out_dim, std::move(act), drop_rate));
+        
+        // As always, changing the architecture means resetting the optimizer!
+        optimizer.set_initialized(false); 
+    }
+    
     std::vector<double> forward(const std::vector<double>& input) {
         std::vector<double> out = input;
         for (auto& l : layers) out = l.forward(out);
@@ -122,8 +149,8 @@ public:
     }
 
     void fit(const std::vector<std::vector<double>>& X, const std::vector<std::vector<double>>& Y, int custom_batch_size = -1) {
+        set_training_mode(true);
         int eff_batch = (custom_batch_size > 0) ? custom_batch_size : batch_size;
-
         for (int epoch = 0; epoch < epochs; ++epoch) {
             double total_loss = 0.0;
             for (size_t b_start = 0; b_start < X.size(); b_start += eff_batch) {
@@ -169,8 +196,10 @@ public:
     }
 
     std::vector<std::vector<double>> predict(const std::vector<std::vector<double>>& X) {
+        set_training_mode(false); // CRITICAL: Turn off dropout for inference
         std::vector<std::vector<double>> preds;
         for (const auto& x : X) preds.push_back(forward(x));
+        set_training_mode(true);  // Turn back on for future training
         return preds;
     }
 
@@ -186,7 +215,8 @@ public:
         for (size_t i = 0; i < p.weights.size(); ++i) {
             int out_d = p.weights[i].size();
             int in_d = p.weights[i].empty() ? 0 : p.weights[i][0].size();
-            add_layer(layer(in_d, out_d, get_activation(p.activations[i])));
+            double d_rate = (i < p.dropout_rates.size()) ? p.dropout_rates[i] : 0.0;
+            add_layer(layer(in_d, out_d, get_activation(p.activations[i]), d_rate));
             layers.back().get_weights() = p.weights[i];
             layers.back().get_bias() = p.biases[i];
         }
@@ -233,6 +263,13 @@ public:
         for (size_t i = 0; i < layers.size(); ++i) { out << "\"" << layers[i].get_activation().name() << "\""; if (i + 1 < layers.size()) out << ","; }
         out << "},\n";
 
+        // 4. Dropout Rates (NEW)
+        out << "  {";
+        for (size_t i = 0; i < layers.size(); ++i) { 
+            out << layers[i].get_dropout_rate(); 
+            if (i + 1 < layers.size()) out << ","; 
+        }
+        out << "},\n";
 
         // 5. Loss, Optimizer, and Params
         out << "  \"" << loss.name() << "\",\n  \"" << optimizer.name << "\",\n  {";

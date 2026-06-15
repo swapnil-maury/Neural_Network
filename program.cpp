@@ -5,7 +5,7 @@
 
 #include"model.h"
 #include"run_score.h"
-// #include"output.h"
+#include"output.h"
 
 using namespace std;
 
@@ -40,14 +40,27 @@ int main() {
        Y[i][4] = x1 - 3*x2 + 10.5*x3 + 10*x4 - x5+noise(gen) ;
     }
 
-    LossFunction loss = losses::MAE();
-    nn::Optimizer opt = nn::Adam();
-    nn::SequentialNetwork model(loss, opt, 1000);
-    ActivationFunction linear = activations::Identity();
-    model.add_layer(nn::layer(5, 5, linear));
-    // model.load_model(model_param);
-    // model.set_batch_size(100);
-    model.set_epochs(50);
+    // LossFunction loss = losses::MSE();
+    // nn::Optimizer opt = nn::Adam();
+    // nn::SequentialNetwork model(loss, opt, 1000);
+    nn::SequentialNetwork model;
+
+    // ActivationFunction linear = activations::Identity();
+    // model.add_layer(nn::layer(5, 8, linear,0.1));
+    // model.add_layer(nn::layer(8, 5, linear));
+    model.load_model(model_param);
+    // model.add_layer(nn::layer(5,5,activations::Identity()));
+
+    // 2. Freeze all existing layers so they don't lose their knowledge
+    for(auto& l : model.get_layers()) {
+        l.set_trainable(false); 
+    }
+
+    // 3. Add a fresh, trainable layer to the very end
+    model.add_layer(5, 5, activations::Identity());
+
+    model.set_batch_size(100);
+    model.set_epochs(5000);
     model.fit(X, Y);
 
 
