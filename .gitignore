@@ -6,6 +6,7 @@ output.h
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+Eigen/
 
 # Python cache
 __pycache__/

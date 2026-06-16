@@ -86,5 +86,68 @@ double accuracy_score(const std::vector<std::vector<double>>& y_true,
 
     return (double)correct / total;
 }
+// --- NEW: MULTI-CLASS CLASSIFICATION (For MNIST) ---
+
+// Helper function to find the index of the highest value in a vector
+inline int argmax(const std::vector<double>& vec) {
+    return std::distance(vec.begin(), std::max_element(vec.begin(), vec.end()));
+}
+
+// Calculates accuracy by comparing the highest predicted probability to the true one-hot label
+inline double accuracy_score_multiclass(const std::vector<std::vector<double>>& y_true,
+                                        const std::vector<std::vector<double>>& y_pred)
+{
+    if (y_true.size() != y_pred.size())
+        throw std::runtime_error("Size mismatch");
+
+    int correct = 0;
+    for (size_t i = 0; i < y_true.size(); i++) {
+        if (argmax(y_true[i]) == argmax(y_pred[i])) {
+            correct++;
+        }
+    }
+    return (double)correct / y_true.size();
+}
+
+// Generates an N x N Confusion Matrix
+inline std::vector<std::vector<int>> confusion_matrix(const std::vector<std::vector<double>>& y_true,
+                                                      const std::vector<std::vector<double>>& y_pred)
+{
+    if (y_true.size() != y_pred.size())
+        throw std::runtime_error("Size mismatch");
+
+    int num_classes = y_true[0].size();
+    std::vector<std::vector<int>> matrix(num_classes, std::vector<int>(num_classes, 0));
+
+    for (size_t i = 0; i < y_true.size(); i++) {
+        int actual_class = argmax(y_true[i]);
+        int predicted_class = argmax(y_pred[i]);
+        matrix[actual_class][predicted_class]++;
+    }
+
+    return matrix;
+}
+
+// Beautifully prints the confusion matrix to the terminal
+inline void print_confusion_matrix(const std::vector<std::vector<int>>& matrix)
+{
+    int num_classes = matrix.size();
+    std::cout << "\n--- Confusion Matrix ---\n";
+    std::cout << std::setw(6) << " ";
+    for (int i = 0; i < num_classes; i++) {
+        std::cout << std::setw(6) << "P_" << i;
+    }
+    std::cout << "\n";
+
+    for (int i = 0; i < num_classes; i++) {
+        std::cout << std::setw(4) << "T_" << i << " |";
+        for (int j = 0; j < num_classes; j++) {
+            std::cout << std::setw(7) << matrix[i][j];
+        }
+        std::cout << "\n";
+    }
+    std::cout << "------------------------\n";
+    std::cout << "(T = True Label, P = Predicted Label)\n";
+}
 
 #endif

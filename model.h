@@ -8,203 +8,445 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <Eigen/Dense> // NEW: Eigen included here
+#include <iomanip>
 
-#include "layer_backprop.h"
+#include "Layers.h"
 #include "loss_func.h"
 #include "optimizer.h"
-#include "normalization.h" // Needed to recognize Normalization classes
 
-namespace nn {
+namespace nn
+{
 
-// 1. Data Structure to hold all model parameters safely in memory
-struct ModelParams {
-    std::vector<std::vector<std::vector<double>>> weights;
-    std::vector<std::vector<double>> biases;
-    std::vector<std::string> activations;
-    std::vector<double> dropout_rates;
+    // Data Structure remains std::vector so static initialization (output.h) still works natively
+    struct ModelParams
+    {
+        std::vector<std::string> layer_names;
+        std::vector<std::vector<std::vector<double>>> weights;
+        std::vector<std::vector<double>> biases;
+        std::vector<std::string> activations;
+        std::vector<double> dropout_rates;
 
-    std::string loss;
-    std::string optimizer;
-    std::vector<double> optimizer_params;
-    int input_dim;
-    int epochs;
-    int batch_size;
-    int optimizer_timestep;
-    std::vector<std::vector<std::vector<std::vector<double>>>> optimizer_state_W;
-    std::vector<std::vector<std::vector<double>>> optimizer_state_b;
-    bool optimizer_initialized;
-};
+        std::string loss;
+        std::string optimizer;
+        std::vector<double> optimizer_params;
+        int input_dim;
+        int epochs;
+        int batch_size;
+        int optimizer_timestep;
+        std::vector<std::vector<std::vector<std::vector<double>>>> optimizer_state_W;
+        std::vector<std::vector<std::vector<double>>> optimizer_state_b;
+        bool optimizer_initialized;
+    };
 
-class SequentialNetwork {
-private:
-    std::vector<layer> layers;
-    LossFunction loss;
-    Optimizer optimizer;
-    int epochs;
-    int batch_size;
-    int input_dim; 
+    class SequentialNetwork
+    {
+    private:
+        std::vector<std::unique_ptr<BaseLayer>> layers;
+        LossFunction loss;
+        Optimizer optimizer;
+        int epochs;
+        int batch_size;
+        int input_dim;
 
-    static std::string canonical_key(const std::string& raw) {
-        std::string key;
-        for (char c : raw) {
-            if (std::isalnum(static_cast<unsigned char>(c))) {
-                key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        static std::string canonical_key(const std::string &raw)
+        {
+            std::string key;
+            for (char c : raw)
+            {
+                if (std::isalnum(static_cast<unsigned char>(c)))
+                {
+                    key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                }
+            }
+            return key;
+        }
+
+        ActivationFunction get_activation(const std::string &name, const std::vector<double> &p = {}) const
+        {
+            const std::string key = canonical_key(name);
+            if (key == "identity")
+                return activations::Identity();
+            if (key == "binarystep")
+                return activations::BinaryStep();
+            if (key == "sigmoid")
+                return activations::Sigmoid();
+            if (key == "tanh")
+                return activations::Tanh();
+            if (key == "relu")
+                return activations::ReLU();
+            if (key == "relu6")
+                return activations::ReLU6();
+            if (key == "leakyrelu")
+                return activations::LeakyReLU(p.empty() ? 0.01 : p[0]);
+            if (key == "prelu")
+                return activations::PReLU(p.empty() ? 0.25 : p[0]);
+            if (key == "elu")
+                return activations::ELU(p.empty() ? 1.0 : p[0]);
+            if (key == "selu")
+                return activations::SELU((p.size() > 0) ? p[0] : 1.0507009873554805, (p.size() > 1) ? p[1] : 1.6732632423543772);
+            if (key == "softplus")
+                return activations::Softplus();
+            if (key == "softsign")
+                return activations::Softsign();
+            if (key == "swish")
+                return activations::Swish(p.empty() ? 1.0 : p[0]);
+            if (key == "silu")
+                return activations::SiLU();
+            if (key == "gelu")
+                return activations::GELU();
+            if (key == "mish")
+                return activations::Mish();
+            if (key == "hardsigmoid")
+                return activations::HardSigmoid();
+            if (key == "hardswish")
+                return activations::HardSwish();
+            return activations::Identity();
+        }
+
+        LossFunction get_loss(const std::string &name, const std::vector<double> &p = {}) const
+        {
+            const std::string key = canonical_key(name);
+            if (key == "mse")
+                return losses::MSE();
+            if (key == "mae")
+                return losses::MAE();
+            if (key == "binarycrossentropy" || key == "bce")
+                return losses::BinaryCrossEntropy();
+            if (key == "hinge")
+                return losses::Hinge();
+            if (key == "squaredhinge")
+                return losses::SquaredHinge();
+            if (key == "huber")
+                return losses::Huber(p.empty() ? 1.0 : p[0]);
+            if (key == "logcosh")
+                return losses::LogCosh();
+            if (key == "msle")
+                return losses::MSLE();
+            if (key == "poisson")
+                return losses::Poisson();
+            if (key == "kldivergence" || key == "kl")
+                return losses::KLDivergence();
+            return losses::MSE();
+        }
+
+        Optimizer get_optimizer(const std::string &name, const std::vector<double> &p = {}) const
+        {
+            const std::string key = canonical_key(name);
+            auto param = [&p](size_t idx, double f)
+            { return (p.size() > idx) ? p[idx] : f; };
+            if (key == "sgd")
+                return nn::SGD(param(0, 0.01));
+            if (key == "momentum")
+                return nn::Momentum(param(0, 0.01), param(1, 0.9));
+            if (key == "rmsprop")
+                return nn::RMSProp(param(0, 0.001), param(1, 0.9), param(2, 1e-8));
+            if (key == "adam")
+                return nn::Adam(param(0, 0.001), param(1, 0.9), param(2, 0.999), param(3, 1e-8));
+            return nn::SGD(0.01);
+        }
+
+        void set_training_mode(bool mode)
+        {
+            for (auto &l : layers)
+            {
+                l->set_training_mode(mode);
             }
         }
-        return key;
-    }
 
-    ActivationFunction get_activation(const std::string& name, const std::vector<double>& p = {}) const {
-        const std::string key = canonical_key(name);
-        if (key == "identity") return activations::Identity();
-        if (key == "binarystep") return activations::BinaryStep();
-        if (key == "sigmoid") return activations::Sigmoid();
-        if (key == "tanh") return activations::Tanh();
-        if (key == "relu") return activations::ReLU();
-        if (key == "relu6") return activations::ReLU6();
-        if (key == "leakyrelu") return activations::LeakyReLU(p.empty() ? 0.01 : p[0]);
-        if (key == "prelu") return activations::PReLU(p.empty() ? 0.25 : p[0]);
-        if (key == "elu") return activations::ELU(p.empty() ? 1.0 : p[0]);
-        if (key == "selu") return activations::SELU((p.size() > 0) ? p[0] : 1.0507009873554805, (p.size() > 1) ? p[1] : 1.6732632423543772);
-        if (key == "softplus") return activations::Softplus();
-        if (key == "softsign") return activations::Softsign();
-        if (key == "swish") return activations::Swish(p.empty() ? 1.0 : p[0]);
-        if (key == "silu") return activations::SiLU();
-        if (key == "gelu") return activations::GELU();
-        if (key == "mish") return activations::Mish();
-        if (key == "hardsigmoid") return activations::HardSigmoid();
-        if (key == "hardswish") return activations::HardSwish();
-        return activations::Identity();
-    }
+    public:
+        SequentialNetwork(LossFunction loss_fn = losses::MSE(), Optimizer opt = nn::SGD(), int epochs = 100)
+            : loss(std::move(loss_fn)), optimizer(std::move(opt)), epochs(epochs), batch_size(1), input_dim(-1) {}
 
-    LossFunction get_loss(const std::string& name, const std::vector<double>& p = {}) const {
-        const std::string key = canonical_key(name);
-        if (key == "mse") return losses::MSE();
-        if (key == "mae") return losses::MAE();
-        if (key == "binarycrossentropy" || key == "bce") return losses::BinaryCrossEntropy();
-        if (key == "hinge") return losses::Hinge();
-        if (key == "squaredhinge") return losses::SquaredHinge();
-        if (key == "huber") return losses::Huber(p.empty() ? 1.0 : p[0]);
-        if (key == "logcosh") return losses::LogCosh();
-        if (key == "msle") return losses::MSLE();
-        if (key == "poisson") return losses::Poisson();
-        if (key == "kldivergence" || key == "kl") return losses::KLDivergence();
-        return losses::MSE();
-    }
-
-    Optimizer get_optimizer(const std::string& name, const std::vector<double>& p = {}) const {
-        const std::string key = canonical_key(name);
-        auto param = [&p](size_t idx, double f) { return (p.size() > idx) ? p[idx] : f; };
-        if (key == "sgd") return nn::SGD(param(0, 0.01));
-        if (key == "momentum") return nn::Momentum(param(0, 0.01), param(1, 0.9));
-        if (key == "rmsprop") return nn::RMSProp(param(0, 0.001), param(1, 0.9), param(2, 1e-8));
-        if (key == "adam") return nn::Adam(param(0, 0.001), param(1, 0.9), param(2, 0.999), param(3, 1e-8));
-        return nn::SGD(0.01);
-    }
-
-    void set_training_mode(bool mode) {
-        for (auto& l : layers) {
-            l.set_training_mode(mode);
+        template <typename T>
+        void add_layer(T layer_object)
+        {
+            // Moves the temporary object onto the heap and creates a unique_ptr
+            layers.push_back(std::make_unique<T>(std::move(layer_object)));
+            optimizer.set_initialized(false);
         }
-    }
+        void add_dense_layer(int in_dim, int out_dim, ActivationFunction act, double dropout_rate = 0.0)
+        {
+            layers.push_back(std::make_unique<DenseLayer>(in_dim, out_dim, std::move(act), dropout_rate));
+            optimizer.set_initialized(false);
+        }
+        template <typename T>
+        void insert_layer(int index, T layer_object)
+        {
+            if (index < 0 || index > layers.size())
+            {
+                std::cerr << "Error: Invalid layer index!" << std::endl;
+                return;
+            }
 
-public:
-    SequentialNetwork(LossFunction loss_fn = losses::MSE(), Optimizer opt = nn::SGD(), int epochs = 100)
-        : loss(std::move(loss_fn)), optimizer(std::move(opt)), epochs(epochs), batch_size(1), input_dim(-1) {}
+            // Moves the temporary object onto the heap, creates a unique_ptr, and inserts it
+            layers.insert(layers.begin() + index, std::make_unique<T>(std::move(layer_object)));
+            optimizer.set_initialized(false);
+        }
 
-    void add_layer(layer l) { 
-        layers.push_back(std::move(l));
-        optimizer.set_initialized(false);
-    }
+        // EIGEN UPDATE: Maps standard vectors to Eigen vectors instantly
+        std::vector<double> forward(const std::vector<double> &input)
+        {
+            Eigen::Map<const Eigen::VectorXd> in_eigen(input.data(), input.size());
+            Eigen::VectorXd out_eigen = in_eigen;
 
-    void add_layer(int in_dim, int out_dim, ActivationFunction act,double dropout_rate = 0.0) { 
-        layers.push_back(layer(in_dim, out_dim, std::move(act),dropout_rate));
-        optimizer.set_initialized(false); 
-    }
+            for (auto &l : layers)
+            {
+                out_eigen = l->forward(out_eigen); // Note the -> operator
+            }
 
-    // Insert a layer at a specific index
-    void insert_layer(int index, int in_dim, int out_dim, ActivationFunction act, double drop_rate = 0.0) {
-        if (index < 0 || index > layers.size()) {
-            std::cerr << "Error: Invalid layer index!" << std::endl;
+            std::vector<double> out(out_eigen.data(), out_eigen.data() + out_eigen.size());
+            return out;
+        }
+
+        void backward(const std::vector<double> &y_pred, const std::vector<double> &y_true)
+        {
+            std::vector<double> grad = loss.gradvec(y_pred, y_true);
+            Eigen::VectorXd current_grad = Eigen::Map<Eigen::VectorXd>(grad.data(), grad.size());
+
+            for (int i = static_cast<int>(layers.size()) - 1; i >= 0; --i)
+            {
+                current_grad = layers[i]->backward(current_grad); // Note the -> operator
+            }
+        }
+
+        void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vector<double>> &Y, int custom_batch_size = -1)
+        {
+            set_training_mode(true);
+            int eff_batch = (custom_batch_size > 0) ? custom_batch_size : batch_size;
+
+            for (int epoch = 0; epoch < epochs; ++epoch)
+            {
+                double total_loss = 0.0;
+                for (size_t b_start = 0; b_start < X.size(); b_start += eff_batch)
+                {
+                    size_t b_end = std::min(X.size(), b_start + eff_batch);
+                    size_t c_batch_size = b_end - b_start;
+
+                    std::vector<Eigen::MatrixXd> batch_dW(layers.size());
+                    std::vector<Eigen::VectorXd> batch_db(layers.size());
+
+                    // 1. INIT ACCUMULATORS
+                    for (size_t l = 0; l < layers.size(); ++l)
+                    {
+                        if (layers[l]->has_parameters() && layers[l]->is_trainable())
+                        {
+                            batch_dW[l] = Eigen::MatrixXd::Zero(layers[l]->get_output_dim(), layers[l]->get_input_dim());
+                            batch_db[l] = Eigen::VectorXd::Zero(layers[l]->get_output_dim());
+                        }
+                    }
+
+                    for (size_t i = b_start; i < b_end; ++i)
+                    {
+                        std::vector<double> y_pred = forward(X[i]);
+                        total_loss += loss.lossvec(y_pred, Y[i]);
+                        backward(y_pred, Y[i]);
+
+                        // 2. ACCUMULATE GRADS
+                        for (size_t l = 0; l < layers.size(); ++l)
+                        {
+                            if (layers[l]->has_parameters() && layers[l]->is_trainable())
+                            {
+                                batch_dW[l] += layers[l]->get_dw();
+                                batch_db[l] += layers[l]->get_db();
+                            }
+                        }
+                    }
+
+                    double inv_batch = 1.0 / c_batch_size;
+
+                    // 3. APPLY AVERAGES
+                    for (size_t l = 0; l < layers.size(); ++l)
+                    {
+                        if (layers[l]->has_parameters() && layers[l]->is_trainable())
+                        {
+                            layers[l]->get_dw() = batch_dW[l] * inv_batch;
+                            layers[l]->get_db() = batch_db[l] * inv_batch;
+                        }
+                    }
+                    optimizer.step(layers);
+                }
+                if (epoch % (epochs / 10 + 1) == 0)
+                {
+                    std::cout << "Epoch " << epoch << " | Loss: " << total_loss / X.size() << std::endl;
+                }
+            }
+        }
+        
+        std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> &X)
+        {
+            set_training_mode(false);
+            std::vector<std::vector<double>> preds;
+            for (const auto &x : X)
+                preds.push_back(forward(x));
+            set_training_mode(true);
+            return preds;
+        }
+
+        void load_model(const ModelParams &p);
+        void save_model(const std::string &filename = "output.h") const;
+        std::vector<std::unique_ptr<BaseLayer>> &get_layers() { return layers; }
+        void set_epochs(int e) { epochs = e; }
+        int get_epochs() const { return epochs; }
+        void set_batch_size(int b) { batch_size = b; }
+        int get_batch_size() const { return batch_size; }
+        int get_input_dim() const { return input_dim; }
+        void summary() const;
+    };
+
+    inline void SequentialNetwork::save_model(const std::string &filename) const
+    {
+        std::ofstream out(filename);
+        if (!out.is_open())
+        {
+            std::cerr << "Error: Could not open " << filename << " for writing.\n";
             return;
         }
-        
-        layers.insert(layers.begin() + index, layer(in_dim, out_dim, std::move(act), drop_rate));
-        
-        // As always, changing the architecture means resetting the optimizer!
-        optimizer.set_initialized(false); 
-    }
-    
-    std::vector<double> forward(const std::vector<double>& input) {
-        std::vector<double> out = input;
-        for (auto& l : layers) out = l.forward(out);
-        return out;
-    }
 
-    void backward(const std::vector<double>& y_pred, const std::vector<double>& y_true) {
-        std::vector<double> grad = loss.gradvec(y_pred, y_true);
-        for (int i = static_cast<int>(layers.size()) - 1; i >= 0; --i) {
-            grad = layers[i].backward(grad);
+        int mod_in_dim = (input_dim > 0) ? input_dim : (layers.empty() ? -1 : layers.front()->get_input_dim());
+
+        out << "#ifndef MODEL_IMPORT\n#define MODEL_IMPORT\n\n"
+            << "#include \"model.h\"\n\n"
+            << "static nn::ModelParams model_param = {\n";
+
+        // 0. Layer Names
+        out << "  {";
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            out << "\"" << layers[i]->get_name() << "\"" << (i + 1 < layers.size() ? ", " : "");
         }
-    }
+        out << "},\n";
 
-    void fit(const std::vector<std::vector<double>>& X, const std::vector<std::vector<double>>& Y, int custom_batch_size = -1) {
-        set_training_mode(true);
-        int eff_batch = (custom_batch_size > 0) ? custom_batch_size : batch_size;
-        for (int epoch = 0; epoch < epochs; ++epoch) {
-            double total_loss = 0.0;
-            for (size_t b_start = 0; b_start < X.size(); b_start += eff_batch) {
-                size_t b_end = std::min(X.size(), b_start + eff_batch);
-                size_t c_batch_size = b_end - b_start;
-
-                std::vector<std::vector<std::vector<double>>> batch_dW(layers.size());
-                std::vector<std::vector<double>> batch_db(layers.size());
-
-                for (size_t l = 0; l < layers.size(); ++l) {
-                    batch_dW[l].assign(layers[l].get_weights().size(), std::vector<double>(layers[l].get_weights()[0].size(), 0.0));
-                    batch_db[l].assign(layers[l].get_bias().size(), 0.0);
-                }
-
-                for (size_t i = b_start; i < b_end; ++i) {
-                    std::vector<double> y_pred = forward(X[i]);
-                    total_loss += loss.lossvec(y_pred, Y[i]);
-                    backward(y_pred, Y[i]);
-
-                    for (size_t l = 0; l < layers.size(); ++l) {
-                        for (size_t r = 0; r < layers[l].get_dw().size(); ++r)
-                            for (size_t c = 0; c < layers[l].get_dw()[r].size(); ++c)
-                                batch_dW[l][r][c] += layers[l].get_dw()[r][c];
-                        for (size_t j = 0; j < layers[l].get_db().size(); ++j)
-                            batch_db[l][j] += layers[l].get_db()[j];
+        // 1. Weights
+        out << "  {\n";
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            if (layers[i]->has_parameters())
+            {
+                const auto &W = layers[i]->get_weights();
+                out << "    {";
+                for (int r = 0; r < W.rows(); ++r)
+                {
+                    out << "{";
+                    for (int c = 0; c < W.cols(); ++c)
+                    {
+                        out << W(r, c) << (c + 1 < W.cols() ? ", " : "");
                     }
+                    out << "}" << (r + 1 < W.rows() ? ", " : "");
                 }
-
-                double inv_batch = 1.0 / c_batch_size;
-                for (size_t l = 0; l < layers.size(); ++l) {
-                    for (size_t r = 0; r < layers[l].get_dw().size(); ++r)
-                        for (size_t c = 0; c < layers[l].get_dw()[r].size(); ++c)
-                            layers[l].get_dw()[r][c] = batch_dW[l][r][c] * inv_batch;
-                    for (size_t j = 0; j < layers[l].get_db().size(); ++j)
-                        layers[l].get_db()[j] = batch_db[l][j] * inv_batch;
-                }
-                optimizer.step(layers);
+                out << "}";
             }
-            if (epoch % (epochs / 10 + 1) == 0) {
-                std::cout << "Epoch " << epoch << " | Loss: " << total_loss / X.size() << std::endl;
+            else
+            {
+                out << "    {}"; // Handle parameterless layers safely
             }
+            out << (i + 1 < layers.size() ? ",\n" : "\n");
         }
+        out << "  },\n";
+
+        // 2. Biases
+        out << "  {\n";
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            if (layers[i]->has_parameters())
+            {
+                const auto &b = layers[i]->get_bias();
+                out << "    {";
+                for (int j = 0; j < b.size(); ++j)
+                {
+                    out << b(j) << (j + 1 < b.size() ? ", " : "");
+                }
+                out << "}";
+            }
+            else
+            {
+                out << "    {}"; // Handle parameterless layers safely
+            }
+            out << (i + 1 < layers.size() ? ",\n" : "\n");
+        }
+        out << "  },\n";
+
+        // 3. Activations
+        out << "  {";
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            out << "\"" << layers[i]->get_activation().name() << "\"" << (i + 1 < layers.size() ? ", " : "");
+        }
+        out << "},\n";
+
+        // 4. Dropout Rates
+        out << "  {";
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            out << layers[i]->get_dropout_rate() << (i + 1 < layers.size() ? ", " : "");
+        }
+        out << "},\n";
+
+        // 5. Loss, Optimizer, and Params
+        out << "  \"" << loss.name() << "\",\n  \"" << optimizer.name << "\",\n  {";
+        auto opt_params = optimizer.params();
+        if (opt_params.empty())
+            opt_params.push_back(optimizer.lr);
+        for (size_t i = 0; i < opt_params.size(); ++i)
+        {
+            out << opt_params[i] << (i + 1 < opt_params.size() ? ", " : "");
+        }
+        out << "},\n";
+
+        // 6. Metadata
+        out << "  " << mod_in_dim << ",\n  " << epochs << ",\n  " << batch_size << ",\n  " << optimizer.get_timestep() << ",\n";
+
+        // 7. Optimizer State W
+        out << "  {\n";
+        const auto &state_W = optimizer.get_state_W();
+        for (size_t i = 0; i < state_W.size(); ++i)
+        {
+            out << "    {\n";
+            for (size_t r = 0; r < state_W[i].size(); ++r)
+            {
+                out << "      {";
+                for (size_t c = 0; c < state_W[i][r].size(); ++c)
+                {
+                    out << "{";
+                    for (size_t k = 0; k < state_W[i][r][c].size(); ++k)
+                    {
+                        out << state_W[i][r][c][k] << (k + 1 < state_W[i][r][c].size() ? ", " : "");
+                    }
+                    out << "}" << (c + 1 < state_W[i][r].size() ? ", " : "");
+                }
+                out << "}" << (r + 1 < state_W[i].size() ? ",\n" : "\n");
+            }
+            out << "    }" << (i + 1 < state_W.size() ? ",\n" : "\n");
+        }
+        out << "  },\n";
+
+        // 8. Optimizer State B
+        out << "  {\n";
+        const auto &state_b = optimizer.get_state_b();
+        for (size_t i = 0; i < state_b.size(); ++i)
+        {
+            out << "    {\n";
+            for (size_t j = 0; j < state_b[i].size(); ++j)
+            {
+                out << "      {";
+                for (size_t k = 0; k < state_b[i][j].size(); ++k)
+                {
+                    out << state_b[i][j][k] << (k + 1 < state_b[i][j].size() ? ", " : "");
+                }
+                out << "}" << (j + 1 < state_b[i].size() ? ",\n" : "\n");
+            }
+            out << "    }" << (i + 1 < state_b.size() ? ",\n" : "\n");
+        }
+        out << "  },\n";
+
+        // 9. Initialized Boolean
+        out << "  " << (optimizer.is_initialized() ? "true" : "false") << "\n};\n\n#endif\n";
+
+        out.close();
     }
 
-    std::vector<std::vector<double>> predict(const std::vector<std::vector<double>>& X) {
-        set_training_mode(false); // CRITICAL: Turn off dropout for inference
-        std::vector<std::vector<double>> preds;
-        for (const auto& x : X) preds.push_back(forward(x));
-        set_training_mode(true);  // Turn back on for future training
-        return preds;
-    }
-
-    // Load Model using the ModelParams Struct
-    void load_model(const ModelParams& p) {
+    inline void SequentialNetwork::load_model(const ModelParams &p)
+    {
         layers.clear();
         input_dim = p.input_dim;
         epochs = p.epochs;
@@ -212,13 +454,48 @@ public:
         loss = get_loss(p.loss);
         optimizer = get_optimizer(p.optimizer, p.optimizer_params);
 
-        for (size_t i = 0; i < p.weights.size(); ++i) {
-            int out_d = p.weights[i].size();
-            int in_d = p.weights[i].empty() ? 0 : p.weights[i][0].size();
+        // FACTORY UPDATE: Loop through layer_names, not weights
+        for (size_t i = 0; i < p.layer_names.size(); ++i)
+        {
+            std::string type = p.layer_names[i];
+
+            // Safe bounds checking in case parameterless layers left these arrays empty
+            int out_d = (i < p.weights.size()) ? p.weights[i].size() : 0;
+            int in_d = (i < p.weights.size() && !p.weights[i].empty()) ? p.weights[i][0].size() : 0;
             double d_rate = (i < p.dropout_rates.size()) ? p.dropout_rates[i] : 0.0;
-            add_layer(layer(in_d, out_d, get_activation(p.activations[i]), d_rate));
-            layers.back().get_weights() = p.weights[i];
-            layers.back().get_bias() = p.biases[i];
+            std::string act_name = (i < p.activations.size()) ? p.activations[i] : "identity";
+
+            // ROUTE 1: Dense Layers
+            if (type == "Dense" || type == "dense")
+            {
+                add_dense_layer(in_d, out_d, get_activation(act_name), d_rate);
+
+                // Only load weights if the layer actually expects them
+                if (layers.back()->has_parameters() && out_d > 0 && in_d > 0)
+                {
+                    auto &W_eigen = layers.back()->get_weights();
+                    auto &b_eigen = layers.back()->get_bias();
+                    for (int r = 0; r < out_d; ++r)
+                    {
+                        b_eigen(r) = p.biases[i][r];
+                        for (int c = 0; c < in_d; ++c)
+                        {
+                            W_eigen(r, c) = p.weights[i][r][c];
+                        }
+                    }
+                }
+            }
+            // ROUTE 2: Dropout Layers (Parameterless)
+            else if (type == "Dropout" || type == "dropout")
+            {
+                layers.push_back(std::make_unique<DropoutLayer>(d_rate));
+                optimizer.set_initialized(false);
+            }
+            // FALLBACK
+            else
+            {
+                std::cerr << "Warning: Unknown layer type loaded: " << type << std::endl;
+            }
         }
 
         optimizer.set_state_W(p.optimizer_state_W);
@@ -227,102 +504,76 @@ public:
         optimizer.set_initialized(p.optimizer_initialized);
     }
 
-    // Save Model directly to the ModelParams static initialization format
-    void save_model(const std::string& filename = "output.h") {
-        std::ofstream out(filename);
-        int mod_in_dim = (input_dim > 0) ? input_dim : (layers.empty() ? -1 : layers.front().get_input_dim());
+    inline void SequentialNetwork::summary() const
+    {
+        std::cout << "Model: \"Sequential\"\n";
+        std::cout << "_________________________________________________________________\n";
+        std::cout << std::left << std::setw(29) << "Layer (type)"
+                  << std::setw(26) << "Output Shape"
+                  << "Param #\n";
+        std::cout << "=================================================================\n";
 
-        out << "#ifndef MODEL_IMPORT\n#define MODEL_IMPORT\n\n#include \"model.h\"\n\nstatic nn::ModelParams model_param = {\n";
+        // Try to infer the starting dimension
+        int current_dim = input_dim;
+        if (current_dim <= 0 && !layers.empty() && layers.front()->has_parameters())
+        {
+            current_dim = layers.front()->get_input_dim();
+        }
 
-        // 1. Weights
-        out << "  {\n";
-        for (size_t i = 0; i < layers.size(); ++i) {
-            const auto& W = layers[i].get_weights();
-            out << "    {";
-            for (size_t r = 0; r < W.size(); ++r) {
-                out << "{";
-                for (size_t c = 0; c < W[r].size(); ++c) { out << W[r][c]; if (c + 1 < W[r].size()) out << ","; }
-                out << "}"; if (r + 1 < W.size()) out << ",";
+        std::string input_shape_str = "(None, " + std::to_string(current_dim) + ")";
+        std::cout << std::left << std::setw(29) << "Input"
+                  << std::setw(26) << input_shape_str
+                  << "0\n";
+        std::cout << "_________________________________________________________________\n";
+
+        int total_params = 0;
+
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            const auto &l = layers[i];
+            std::string type = l->get_name();
+            std::string layer_name = type + "_" + std::to_string(i + 1);
+
+            // Determine output shape (pass through if layer has no parameters)
+            int out_dim = current_dim;
+            if (l->has_parameters())
+            {
+                out_dim = l->get_output_dim();
             }
-            out << "}"; if (i + 1 < layers.size()) out << ",\n";
-        }
-        out << "  },\n";
 
-        // 2. Biases
-        out << "  {\n";
-        for (size_t i = 0; i < layers.size(); ++i) {
-            const auto& b = layers[i].get_bias();
-            out << "    {";
-            for (size_t j = 0; j < b.size(); ++j) { out << b[j]; if (j + 1 < b.size()) out << ","; }
-            out << "}"; if (i + 1 < layers.size()) out << ",\n";
-        }
-        out << "  },\n";
-
-        // 3. Activations
-        out << "  {";
-        for (size_t i = 0; i < layers.size(); ++i) { out << "\"" << layers[i].get_activation().name() << "\""; if (i + 1 < layers.size()) out << ","; }
-        out << "},\n";
-
-        // 4. Dropout Rates (NEW)
-        out << "  {";
-        for (size_t i = 0; i < layers.size(); ++i) { 
-            out << layers[i].get_dropout_rate(); 
-            if (i + 1 < layers.size()) out << ","; 
-        }
-        out << "},\n";
-
-        // 5. Loss, Optimizer, and Params
-        out << "  \"" << loss.name() << "\",\n  \"" << optimizer.name << "\",\n  {";
-        auto opt_params = optimizer.params();
-        if (opt_params.empty()) opt_params.push_back(optimizer.lr);
-        for (size_t i = 0; i < opt_params.size(); ++i) { out << opt_params[i]; if (i + 1 < opt_params.size()) out << ","; }
-        out << "},\n";
-
-        // 6. Metadata
-        out << "  " << mod_in_dim << ",\n  " << epochs << ",\n  " << batch_size << ",\n  " << optimizer.get_timestep() << ",\n";
-
-        // 7. Optimizer State W
-        out << "  {\n";
-        for (const auto& s : optimizer.get_state_W()) {
-            out << "    {\n";
-            for (size_t i = 0; i < s.size(); ++i) {
-                out << "      {";
-                for (size_t r = 0; r < s[i].size(); ++r) {
-                    out << "{";
-                    for (size_t c = 0; c < s[i][r].size(); ++c) { out << s[i][r][c]; if (c + 1 < s[i][r].size()) out << ","; }
-                    out << "}"; if (r + 1 < s[i].size()) out << ",";
-                }
-                out << "}"; if (i + 1 < s.size()) out << ",\n";
+            // Calculate total weights + biases
+            int params = 0;
+            if (l->has_parameters())
+            {
+                const auto &W = l->get_weights();
+                const auto &b = l->get_bias();
+                params = (W.rows() * W.cols()) + b.size();
             }
-            out << "    },\n";
-        }
-        out << "  },\n";
 
-        // 8. Optimizer State B
-        out << "  {\n";
-        for (const auto& s : optimizer.get_state_b()) {
-            out << "    {\n";
-            for (size_t i = 0; i < s.size(); ++i) {
-                out << "      {";
-                for (size_t j = 0; j < s[i].size(); ++j) { out << s[i][j]; if (j + 1 < s[i].size()) out << ","; }
-                out << "}"; if (i + 1 < s.size()) out << ",\n";
+            total_params += params;
+            current_dim = out_dim; // carry over shape to the next layer
+
+            // Print the beautifully formatted row
+            std::string shape_str = "(None, " + std::to_string(out_dim) + ")";
+            std::cout << std::left << std::setw(29) << layer_name
+                      << std::setw(26) << shape_str
+                      << params << "\n";
+
+            if (i < layers.size() - 1)
+            {
+                std::cout << "_________________________________________________________________\n";
             }
-            out << "    },\n";
         }
-        out << "  },\n";
 
-        // 9. Initialized Boolean
-        out << "  " << (optimizer.is_initialized() ? "true" : "false") << "\n};\n\n#endif\n";
+        std::cout << "=================================================================\n";
+        // To add commas to large numbers (e.g., 1,000,000), you'd use a locale,
+        // but standard printing works perfectly here.
+        std::cout << "Total params: " << total_params << "\n";
+        std::cout << "Trainable params: " << total_params << "\n";
+        std::cout << "Non-trainable params: 0\n";
+        std::cout << "_________________________________________________________________\n";
     }
 
-    std::vector<layer>& get_layers() { return layers; }
-    void set_epochs(int e) { epochs = e; }
-    int get_epochs() const { return epochs; }
-    void set_batch_size(int b) { batch_size = b; }
-    int get_batch_size() const { return batch_size; }
-    int get_input_dim() const { return input_dim; }
-};
-
-}  // namespace nn
+} // namespace nn
 
 #endif

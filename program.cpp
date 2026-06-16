@@ -40,27 +40,25 @@ int main() {
        Y[i][4] = x1 - 3*x2 + 10.5*x3 + 10*x4 - x5+noise(gen) ;
     }
 
+    nn::SequentialNetwork model;
+    model.load_model(model_param);
+    
     // LossFunction loss = losses::MSE();
     // nn::Optimizer opt = nn::Adam();
     // nn::SequentialNetwork model(loss, opt, 1000);
-    nn::SequentialNetwork model;
-
     // ActivationFunction linear = activations::Identity();
-    // model.add_layer(nn::layer(5, 8, linear,0.1));
-    // model.add_layer(nn::layer(8, 5, linear));
-    model.load_model(model_param);
-    // model.add_layer(nn::layer(5,5,activations::Identity()));
+    // model.add_dense_layer(5, 1000, linear, 0.1);
+    // model.add_dense_layer(1000, 1000, linear);
+    // model.add_layer(nn::DropoutLayer(0.1));
+    // model.add_layer(nn::DenseLayer(1000,5,activations::Identity()));
 
     // 2. Freeze all existing layers so they don't lose their knowledge
     for(auto& l : model.get_layers()) {
-        l.set_trainable(false); 
+        l->set_trainable(false); 
     }
 
-    // 3. Add a fresh, trainable layer to the very end
-    model.add_layer(5, 5, activations::Identity());
-
     model.set_batch_size(100);
-    model.set_epochs(5000);
+    model.set_epochs(5);
     model.fit(X, Y);
 
 
@@ -83,5 +81,6 @@ cout<<endl;
 
 cout<<"R2 score is "<<r2_score(Y,preds)<<endl;
 model.save_model();
+model.summary();
     return 0;
 }

@@ -2,153 +2,163 @@
 #define OPTIMIZER_H
 
 #include <vector>
-#include<algorithm>
 #include <functional>
-#include <utility>
-#include"layer_backprop.h"
+#include <string>
+#include <cmath>
+#include<memory>
+#include <Eigen/Dense>
+
+#include "Layers.h"
 
 namespace nn {
-    // The UpdateRule lambda signature: 
-    // (param, gradient, state_vectors, index)
+
+// =====================================================================
+// CLEAN READABILITY ALIASES (Hides the ugly 4D vectors!)
+// =====================================================================
+using SavedMatrix = std::vector<std::vector<double>>;
+using SavedVector = std::vector<double>;
+using SavedStateW = std::vector<std::vector<SavedMatrix>>; // Replaces the 4D Vector
+using SavedStateB = std::vector<std::vector<SavedVector>>; // Replaces the 3D Vector
+
 class Optimizer {
 private:
-    using UpdateRule = std::function<
-        void(
-            std::vector<std::vector<double>>&,
-            std::vector<std::vector<double>>&,
-            std::vector<double>&,
-            std::vector<double>&,
-            std::vector<std::vector<std::vector<std::vector<double>>>>&, // W states
-            std::vector<std::vector<std::vector<double>>>&,              // b states
-            int,
-            double,
-            int&   // timestep
-        )
-    >;
+    using UpdateRule = std::function<void(
+        Eigen::MatrixXd&, Eigen::MatrixXd&, Eigen::VectorXd&, Eigen::VectorXd&,
+        std::vector<std::vector<Eigen::MatrixXd>>&, std::vector<std::vector<Eigen::VectorXd>>&,
+        int, double, int&
+    )>;
 
     UpdateRule rule;
     int t = 0;
     
-    // state buffers
-    // state_W[state_id][layer][i][j]
-    std::vector<std::vector<std::vector<std::vector<double>>>> state_W;
-    
-    // state_b[state_id][layer][i]
-    std::vector<std::vector<std::vector<double>>> state_b;
+    // Internal Eigen memory arrays
+    std::vector<std::vector<Eigen::MatrixXd>> state_W;
+    std::vector<std::vector<Eigen::VectorXd>> state_b;
     
     bool initialized = false;
     std::vector<double> params_;
-    
+
 public:
     std::string name;
     double lr;
-    Optimizer(UpdateRule r,
-              double lr,
-              int num_states,
-              std::string name,
-              std::vector<double> params = {})
-        : rule(std::move(r)),
-          lr(lr),
-          params_(std::move(params)),
-          name(std::move(name)) {
+    
+    Optimizer(UpdateRule r, double lr, int num_states, std::string name, std::vector<double> params = {})
+        : rule(std::move(r)), lr(lr), params_(std::move(params)), name(std::move(name)) {
         state_W.resize(num_states);
         state_b.resize(num_states);
     }
 
-    const std::vector<double>& params() const {
-        return params_;
-    }
+    const std::vector<double>& params() const { return params_; }
 
-     void init(std::vector<layer>& layers) {
+void init(const std::vector<std::unique_ptr<BaseLayer>>& layers) {
         for (int s = 0; s < state_W.size(); s++) {
-            for (auto& l : layers) {
-                state_W[s].push_back(l.get_weights());
-                state_b[s].push_back(l.get_bias());
-
-                // zero init
-                for (auto& row : state_W[s].back())
-                    for (auto& x : row) x = 0.0;
-
-                std::fill(state_b[s].back().begin(), state_b[s].back().end(), 0.0);
+            state_W[s].clear();
+            state_b[s].clear();
+            for (const auto& l : layers) {
+                if (l->has_parameters()) {
+                    state_W[s].push_back(Eigen::MatrixXd::Zero(l->get_output_dim(), l->get_input_dim()));
+                    state_b[s].push_back(Eigen::VectorXd::Zero(l->get_output_dim()));
+                } else {
+                    // Push empty matrices for parameterless layers
+                    state_W[s].push_back(Eigen::MatrixXd(0, 0));
+                    state_b[s].push_back(Eigen::VectorXd(0));
+                }
             }
         }
         initialized = true;
     }
-
-    void update(nn::layer& l, int idx) {
-        if (!initialized) return;
-
-        auto& W = const_cast<std::vector<std::vector<double>>&>(l.get_weights());
-        auto& b = const_cast<std::vector<double>&>(l.get_bias());
-        auto& dW = l.get_dw();
-        auto& db = l.get_db();
-
-        rule(W, dW, b, db, state_W, state_b, idx, lr,t);
-    }
-    void step(std::vector<layer>& layers) {
+void step(std::vector<std::unique_ptr<BaseLayer>>& layers) {
         if (!initialized) init(layers);
-
-        t++;
-
+        t++; 
         for (int i = 0; i < layers.size(); i++) {
-            if (!layers[i].is_trainable()) {
-                continue; 
-            }
+            // Skip layers without weights
+            if (!layers[i]->has_parameters()|| !layers[i]->is_trainable()) continue; 
             
-            auto& W = layers[i].get_weights();
-            auto& dW = layers[i].get_dw();
-            auto& b = layers[i].get_bias();
-            auto& db = layers[i].get_db();
-
-            rule(W, dW, b, db, state_W, state_b, i, lr, t);
+            rule(layers[i]->get_weights(), layers[i]->get_dw(), 
+                 layers[i]->get_bias(), layers[i]->get_db(), 
+                 state_W, state_b, i, lr, t);
         }
     }
 
-    // Methods to access and restore optimizer state
-    const std::vector<std::vector<std::vector<std::vector<double>>>>& get_state_W() const {
-        return state_W;
+    // =====================================================================
+    // STATE TRANSLATORS (Now highly readable using aliases)
+    // =====================================================================
+    
+    SavedStateW get_state_W() const {
+        SavedStateW res(state_W.size());
+        for (size_t s = 0; s < state_W.size(); ++s) {
+            res[s].resize(state_W[s].size());
+            for (size_t l = 0; l < state_W[s].size(); ++l) {
+                res[s][l].assign(state_W[s][l].rows(), std::vector<double>(state_W[s][l].cols(), 0.0));
+                for (int r = 0; r < state_W[s][l].rows(); ++r) {
+                    for (int c = 0; c < state_W[s][l].cols(); ++c) {
+                        res[s][l][r][c] = state_W[s][l](r, c);
+                    }
+                }
+            }
+        }
+        return res;
     }
 
-    const std::vector<std::vector<std::vector<double>>>& get_state_b() const {
-        return state_b;
+    SavedStateB get_state_b() const {
+        SavedStateB res(state_b.size());
+        for (size_t s = 0; s < state_b.size(); ++s) {
+            res[s].resize(state_b[s].size());
+            for (size_t l = 0; l < state_b[s].size(); ++l) {
+                res[s][l].assign(state_b[s][l].size(), 0.0);
+                for (int i = 0; i < state_b[s][l].size(); ++i) {
+                    res[s][l][i] = state_b[s][l](i);
+                }
+            }
+        }
+        return res;
     }
 
-    int get_timestep() const {
-        return t;
+    void set_state_W(const SavedStateW& new_state_W) {
+        state_W.resize(new_state_W.size());
+        for (size_t s = 0; s < new_state_W.size(); ++s) {
+            state_W[s].clear();
+            for (size_t l = 0; l < new_state_W[s].size(); ++l) {
+                int rows = new_state_W[s][l].size();
+                int cols = rows > 0 ? new_state_W[s][l][0].size() : 0;
+                Eigen::MatrixXd mat(rows, cols);
+                for (int r = 0; r < rows; ++r) {
+                    for (int c = 0; c < cols; ++c) mat(r, c) = new_state_W[s][l][r][c];
+                }
+                state_W[s].push_back(mat);
+            }
+        }
     }
 
-    void set_state_W(const std::vector<std::vector<std::vector<std::vector<double>>>>& new_state_W) {
-        state_W = new_state_W;
+    void set_state_b(const SavedStateB& new_state_b) {
+        state_b.resize(new_state_b.size());
+        for (size_t s = 0; s < new_state_b.size(); ++s) {
+            state_b[s].clear();
+            for (size_t l = 0; l < new_state_b[s].size(); ++l) {
+                int size = new_state_b[s][l].size();
+                Eigen::VectorXd vec(size);
+                for (int i = 0; i < size; ++i) vec(i) = new_state_b[s][l][i];
+                state_b[s].push_back(vec);
+            }
+        }
     }
 
-    void set_state_b(const std::vector<std::vector<std::vector<double>>>& new_state_b) {
-        state_b = new_state_b;
-    }
-
-    void set_timestep(int new_t) {
-        t = new_t;
-    }
-
-    void set_initialized(bool init) {
-        initialized = init;
-    }
-
-    bool is_initialized() const {
-        return initialized;
-    }
+    // Standard getters/setters expected by model.h
+    int get_timestep() const { return t; }
+    void set_timestep(int new_t) { t = new_t; }
+    void set_initialized(bool init) { initialized = init; }
+    bool is_initialized() const { return initialized; }
 };
+
+// =====================================================================
+// ALGORITHMS (Fully Functional Eigen implementations)
+// =====================================================================
 
 inline Optimizer SGD(double lr = 0.01) {
     return Optimizer(
-        [](auto& W, auto& dW, auto& b, auto& db,
-           auto&, auto&, int, double lr, int&) {
-
-            for (int i = 0; i < W.size(); i++)
-                for (int j = 0; j < W[i].size(); j++)
-                    W[i][j] -= lr * dW[i][j];
-
-            for (int i = 0; i < b.size(); i++)
-                b[i] -= lr * db[i];
+        [](auto& W, auto& dW, auto& b, auto& db, auto&, auto&, int, double lr, int&) {
+            W -= lr * dW; 
+            b -= lr * db;
         },
         lr, 0, "SGD", {lr}
     );
@@ -156,23 +166,15 @@ inline Optimizer SGD(double lr = 0.01) {
 
 inline Optimizer Momentum(double lr = 0.01, double beta = 0.9) {
     return Optimizer(
-        [beta](auto& W, auto& dW, auto& b, auto& db,
-               auto& state_W, auto& state_b, int idx, double lr, int&) {
-
-            auto& vW = state_W[0][idx];
+        [beta](auto& W, auto& dW, auto& b, auto& db, auto& state_W, auto& state_b, int idx, double lr, int&) {
+            auto& vW = state_W[0][idx]; 
             auto& vb = state_b[0][idx];
-
-            for (int i = 0; i < W.size(); i++) {
-                for (int j = 0; j < W[i].size(); j++) {
-                    vW[i][j] = beta * vW[i][j] + (1 - beta) * dW[i][j];
-                    W[i][j] -= lr * vW[i][j];
-                }
-            }
-
-            for (int i = 0; i < b.size(); i++) {
-                vb[i] = beta * vb[i] + (1 - beta) * db[i];
-                b[i] -= lr * vb[i];
-            }
+            
+            vW = beta * vW + (1 - beta) * dW;
+            W -= lr * vW; 
+            
+            vb = beta * vb + (1 - beta) * db;
+            b -= lr * vb;
         },
         lr, 1, "Momentum", {lr, beta}
     );
@@ -180,68 +182,45 @@ inline Optimizer Momentum(double lr = 0.01, double beta = 0.9) {
 
 inline Optimizer RMSProp(double lr = 0.001, double beta = 0.9, double eps = 1e-8) {
     return Optimizer(
-        [beta, eps](auto& W, auto& dW, auto& b, auto& db,
-                    auto& state_W, auto& state_b, int idx, double lr, int&) {
-
+        [beta, eps](auto& W, auto& dW, auto& b, auto& db, auto& state_W, auto& state_b, int idx, double lr, int&) {
             auto& sW = state_W[0][idx];
             auto& sb = state_b[0][idx];
-
-            for (int i = 0; i < W.size(); i++) {
-                for (int j = 0; j < W[i].size(); j++) {
-                    sW[i][j] = beta * sW[i][j] + (1 - beta) * dW[i][j] * dW[i][j];
-                    W[i][j] -= lr * dW[i][j] / (sqrt(sW[i][j]) + eps);
-                }
-            }
-
-            for (int i = 0; i < b.size(); i++) {
-                sb[i] = beta * sb[i] + (1 - beta) * db[i] * db[i];
-                b[i] -= lr * db[i] / (sqrt(sb[i]) + eps);
-            }
+            
+            sW.array() = beta * sW.array() + (1 - beta) * dW.array().square();
+            W.array() -= lr * dW.array() / (sW.array().sqrt() + eps);
+            
+            sb.array() = beta * sb.array() + (1 - beta) * db.array().square();
+            b.array() -= lr * db.array() / (sb.array().sqrt() + eps);
         },
         lr, 1, "RMSProp", {lr, beta, eps}
     );
 }
 
-inline Optimizer Adam(double lr = 0.001,
-                      double b1 = 0.9,
-                      double b2 = 0.999,
-                      double eps = 1e-8) {
+inline Optimizer Adam(double lr = 0.001, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8) {
     return Optimizer(
-        [b1, b2, eps](auto& W, auto& dW, auto& b, auto& db,
-                      auto& state_W, auto& state_b, int idx, double lr, int& t) {
-
+        [b1, b2, eps](auto& W, auto& dW, auto& b, auto& db, auto& state_W, auto& state_b, int idx, double lr, int& t) {
             auto& mW = state_W[0][idx];
             auto& vW = state_W[1][idx];
-
             auto& mb = state_b[0][idx];
             auto& vb = state_b[1][idx];
 
-            for (int i = 0; i < W.size(); i++) {
-                for (int j = 0; j < W[i].size(); j++) {
-                    mW[i][j] = b1 * mW[i][j] + (1 - b1) * dW[i][j];
-                    vW[i][j] = b2 * vW[i][j] + (1 - b2) * dW[i][j] * dW[i][j];
+            mW = b1 * mW + (1 - b1) * dW;
+            vW.array() = b2 * vW.array() + (1 - b2) * dW.array().square();
 
-                    double m_hat = mW[i][j] / (1 - pow(b1, t));
-                    double v_hat = vW[i][j] / (1 - pow(b2, t));
+            Eigen::MatrixXd m_hat_W = mW / (1 - std::pow(b1, t));
+            Eigen::MatrixXd v_hat_W = vW / (1 - std::pow(b2, t));
+            W.array() -= lr * m_hat_W.array() / (v_hat_W.array().sqrt() + eps);
 
-                    W[i][j] -= lr * m_hat / (sqrt(v_hat) + eps);
-                }
-            }
+            mb = b1 * mb + (1 - b1) * db;
+            vb.array() = b2 * vb.array() + (1 - b2) * db.array().square();
 
-            for (int i = 0; i < b.size(); i++) {
-                mb[i] = b1 * mb[i] + (1 - b1) * db[i];
-                vb[i] = b2 * vb[i] + (1 - b2) * db[i] * db[i];
-
-                double m_hat = mb[i] / (1 - pow(b1, t));
-                double v_hat = vb[i] / (1 - pow(b2, t));
-
-                b[i] -= lr * m_hat / (sqrt(v_hat) + eps);
-            }
+            Eigen::VectorXd m_hat_b = mb / (1 - std::pow(b1, t));
+            Eigen::VectorXd v_hat_b = vb / (1 - std::pow(b2, t));
+            b.array() -= lr * m_hat_b.array() / (v_hat_b.array().sqrt() + eps);
         },
         lr, 2, "Adam", {lr, b1, b2, eps}
     );
 }
 
-
-}
+} // namespace nn
 #endif

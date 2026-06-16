@@ -16,3 +16,24 @@ tommorows updates
 3. after this all the things done then i will move towards eigen libraries as it is growing bigger and bigger and the mathmatical requirement is high so i have to optimize the performance also
 
 4. 
+
+// g++ -std=c++17 -I . -O3 -march=native program.cpp 
+
+/*
+# 1. Download the latest stable Eigen release (3.4.0)
+curl -O https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+
+# 2. Extract the archive
+tar -xzf eigen-3.4.0.tar.gz
+
+# 3. Move ONLY the core "Eigen" folder into your project directory
+mv eigen-3.4.0/Eigen ./Eigen
+
+# 4. Delete the massive extracted folder and the zip file to save space
+rm -rf eigen-3.4.0 eigen-3.4.0.tar.gz
+
+# 5. Verify it worked (Should print out a list of core header files)
+ls ./Eigen
+
+
+*/
