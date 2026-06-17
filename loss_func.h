@@ -1,60 +1,36 @@
 #ifndef LOSS_FUNC_H
 #define LOSS_FUNC_H
 
-#include <algorithm>
-#include <cmath>
+#include <Eigen/Dense>
 #include <functional>
-#include <stdexcept>
 #include <string>
 #include <utility>
-#include <vector>
+#include <cmath>
+#include <stdexcept>
 
 class LossFunction {
 private:
-    std::function<double(double, double)> loss_fn_;
-    std::function<double(double, double)> deriv_fn_;
+    std::function<double(const Eigen::MatrixXd&, const Eigen::MatrixXd&)> loss_fn_;
+    std::function<Eigen::MatrixXd(const Eigen::MatrixXd&, const Eigen::MatrixXd&)> deriv_fn_;
     std::string name_;
 
 public:
-    LossFunction(std::function<double(double, double)> loss_fn,
-                 std::function<double(double, double)> deriv_fn,
+    LossFunction(std::function<double(const Eigen::MatrixXd&, const Eigen::MatrixXd&)> loss_fn,
+                 std::function<Eigen::MatrixXd(const Eigen::MatrixXd&, const Eigen::MatrixXd&)> deriv_fn,
                  std::string name = "custom")
         : loss_fn_(std::move(loss_fn)),
           deriv_fn_(std::move(deriv_fn)),
           name_(std::move(name)) {}
 
-    // Computes the raw loss for a single sample: L(y_pred, y_true)
-    double compute_loss(double y_pred, double y_true) const {
+    double compute_loss(const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) const {
         return loss_fn_(y_pred, y_true);
     }
 
-    // Computes the raw derivative: dL/dy_pred
-    double derivative(double y_pred, double y_true) const {
+    Eigen::MatrixXd compute_gradient(const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) const {
         return deriv_fn_(y_pred, y_true);
     }
 
-    double lossvec(const std::vector<double>& y_pred,const std::vector<double>& y_true) const {
-
-        double loss = 0.0;
-        for (size_t i = 0; i < y_pred.size(); ++i) {
-            loss += loss_fn_(y_pred[i], y_true[i]);
-        }
-        return loss / y_pred.size();
-    }
-
-    std::vector<double> gradvec(const std::vector<double>& y_pred,
-                                const std::vector<double>& y_true) const {
-
-        std::vector<double> grad(y_pred.size());
-
-        for (size_t i = 0; i < y_pred.size(); ++i) {
-            grad[i] = deriv_fn_(y_pred[i], y_true[i]);
-        }
-        return grad;
-    }
-
-
-    const std::string& name() const {
+    const std::string& get_name() const {
         return name_;
     }
 };
@@ -64,21 +40,22 @@ namespace losses {
 // Small epsilon for numerical stability
 inline constexpr double kEps = 1e-12;
 
-// Helper to keep probabilities in (0, 1) range
-inline double clamp_prob(double p) {
-    return std::min(1.0 - kEps, std::max(kEps, p));
+// Helper to keep probabilities in (0, 1) range natively in Eigen
+// Update clamp_prob to handle and return 2D matrices
+inline Eigen::MatrixXd clamp_prob(const Eigen::MatrixXd& p) {
+    return p.array().cwiseMax(kEps).cwiseMin(1.0 - kEps).matrix();
 }
 
-// --- Scalar Loss Functions ---
+
+// --- Scalar Loss Functions (Vectorized over elements) ---
 
 inline LossFunction MSE() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            double e = y_pred - y_true;
-            return e * e;
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return (y_pred - y_true).squaredNorm() / y_pred.size(); // Mean loss
         },
-        [](double y_pred, double y_true) {
-            return 2.0 * (y_pred - y_true);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return 2.0 * (y_pred - y_true); // Raw gradient (no size division, matching your logic)
         },
         "MSE"
     );
@@ -86,14 +63,11 @@ inline LossFunction MSE() {
 
 inline LossFunction MAE() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            return std::abs(y_pred - y_true);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return (y_pred - y_true).cwiseAbs().mean();
         },
-        [](double y_pred, double y_true) {
-            double e = y_pred - y_true;
-            if (e > 0.0) return 1.0;
-            if (e < 0.0) return -1.0;
-            return 0.0;
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return (y_pred - y_true).array().sign().matrix();
         },
         "MAE"
     );
@@ -101,13 +75,14 @@ inline LossFunction MAE() {
 
 inline LossFunction BinaryCrossEntropy() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            double p = clamp_prob(y_pred);
-            return -(y_true * std::log(p) + (1.0 - y_true) * std::log(1.0 - p));
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = clamp_prob(y_pred);
+            Eigen::ArrayXd t = y_true.array();
+            return -(t * p.log() + (1.0 - t) * (1.0 - p).log()).mean();
         },
-        [](double y_pred, double y_true) {
-            double p = clamp_prob(y_pred);
-            return (p - y_true) / (p * (1.0 - p));
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = clamp_prob(y_pred);
+            return ((p - y_true.array()) / (p * (1.0 - p))).matrix();
         },
         "BinaryCrossEntropy"
     );
@@ -115,11 +90,12 @@ inline LossFunction BinaryCrossEntropy() {
 
 inline LossFunction Hinge() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            return std::max(0.0, 1.0 - y_true * y_pred);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return (1.0 - y_true.array() * y_pred.array()).cwiseMax(0.0).mean();
         },
-        [](double y_pred, double y_true) {
-            return (1.0 - y_true * y_pred > 0.0) ? -y_true : 0.0;
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd margin = 1.0 - y_true.array() * y_pred.array();
+            return ((margin > 0.0).cast<double>() * -y_true.array()).matrix();
         },
         "Hinge"
     );
@@ -127,13 +103,13 @@ inline LossFunction Hinge() {
 
 inline LossFunction SquaredHinge() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            double margin = std::max(0.0, 1.0 - y_true * y_pred);
-            return margin * margin;
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd margin = (1.0 - y_true.array() * y_pred.array()).cwiseMax(0.0);
+            return margin.square().mean();
         },
-        [](double y_pred, double y_true) {
-            double margin = 1.0 - y_true * y_pred;
-            return (margin > 0.0) ? (-2.0 * y_true * margin) : 0.0;
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd margin = 1.0 - y_true.array() * y_pred.array();
+            return ((margin > 0.0).cast<double>() * -2.0 * y_true.array() * margin).matrix();
         },
         "SquaredHinge"
     );
@@ -141,15 +117,17 @@ inline LossFunction SquaredHinge() {
 
 inline LossFunction Huber(double delta = 1.0) {
     return LossFunction(
-        [delta](double y_pred, double y_true) {
-            double e = y_pred - y_true;
-            double ae = std::abs(e);
-            return (ae <= delta) ? (0.5 * e * e) : (delta * (ae - 0.5 * delta));
+        [delta](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd e = y_pred.array() - y_true.array();
+            Eigen::ArrayXd ae = e.abs();
+            return ((ae <= delta).cast<double>() * (0.5 * e.square()) + 
+                    (ae > delta).cast<double>() * (delta * (ae - 0.5 * delta))).mean();
         },
-        [delta](double y_pred, double y_true) {
-            double e = y_pred - y_true;
-            if (std::abs(e) <= delta) return e;
-            return (e > 0.0 ? delta : -delta);
+        [delta](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd e = y_pred.array() - y_true.array();
+            Eigen::ArrayXd ae = e.abs();
+            return ((ae <= delta).cast<double>() * e + 
+                    (ae > delta).cast<double>() * e.sign() * delta).matrix();
         },
         "Huber"
     );
@@ -157,11 +135,11 @@ inline LossFunction Huber(double delta = 1.0) {
 
 inline LossFunction LogCosh() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            return std::log(std::cosh(y_pred - y_true));
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return (y_pred - y_true).array().cosh().log().mean();
         },
-        [](double y_pred, double y_true) {
-            return std::tanh(y_pred - y_true);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            return (y_pred - y_true).array().tanh().matrix();
         },
         "LogCosh"
     );
@@ -169,16 +147,15 @@ inline LossFunction LogCosh() {
 
 inline LossFunction MSLE() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            double p = std::max(y_pred, -1.0 + kEps);
-            double t = std::max(y_true, -1.0 + kEps);
-            double diff = std::log1p(p) - std::log1p(t);
-            return diff * diff;
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = y_pred.array().cwiseMax(-1.0 + kEps);
+            Eigen::ArrayXd t = y_true.array().cwiseMax(-1.0 + kEps);
+            return ((1.0 + p).log() - (1.0 + t).log()).square().mean();
         },
-        [](double y_pred, double y_true) {
-            double p = std::max(y_pred, -1.0 + kEps);
-            double t = std::max(y_true, -1.0 + kEps);
-            return (2.0 * (std::log1p(p) - std::log1p(t))) / (1.0 + p);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = y_pred.array().cwiseMax(-1.0 + kEps);
+            Eigen::ArrayXd t = y_true.array().cwiseMax(-1.0 + kEps);
+            return (2.0 * ((1.0 + p).log() - (1.0 + t).log()) / (1.0 + p)).matrix();
         },
         "MSLE"
     );
@@ -186,13 +163,13 @@ inline LossFunction MSLE() {
 
 inline LossFunction Poisson() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            double lambda = std::max(y_pred, kEps);
-            return lambda - y_true * std::log(lambda);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd lambda = y_pred.array().cwiseMax(kEps);
+            return (lambda - y_true.array() * lambda.log()).mean();
         },
-        [](double y_pred, double y_true) {
-            double lambda = std::max(y_pred, kEps);
-            return 1.0 - (y_true / lambda);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd lambda = y_pred.array().cwiseMax(kEps);
+            return (1.0 - (y_true.array() / lambda)).matrix();
         },
         "Poisson"
     );
@@ -200,15 +177,15 @@ inline LossFunction Poisson() {
 
 inline LossFunction KLDivergence() {
     return LossFunction(
-        [](double y_pred, double y_true) {
-            double p = clamp_prob(y_pred);
-            double t = std::max(y_true, kEps);
-            return t * std::log(t / p);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = clamp_prob(y_pred);
+            Eigen::ArrayXd t = y_true.array().cwiseMax(kEps);
+            return (t * (t / p).log()).mean();
         },
-        [](double y_pred, double y_true) {
-            double p = clamp_prob(y_pred);
-            double t = std::max(y_true, kEps);
-            return -(t / p);
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = clamp_prob(y_pred);
+            Eigen::ArrayXd t = y_true.array().cwiseMax(kEps);
+            return -(t / p).matrix();
         },
         "KLDivergence"
     );
@@ -216,50 +193,54 @@ inline LossFunction KLDivergence() {
 
 // --- Categorical/Vector Functions ---
 
-inline std::vector<double> softmax(const std::vector<double>& logits) {
-    if (logits.empty()) return {};
-    const double max_logit = *std::max_element(logits.begin(), logits.end());
-    std::vector<double> exps(logits.size());
-    double sum = 0.0;
-    for (size_t i = 0; i < logits.size(); ++i) {
-        exps[i] = std::exp(logits[i] - max_logit);
-        sum += exps[i];
-    }
-    for (double& v : exps) v /= sum;
-    return exps;
+inline Eigen::MatrixXd softmax(const Eigen::MatrixXd& logits) {
+    if (logits.size() == 0) return Eigen::MatrixXd();
+    double max_logit = logits.maxCoeff();
+    Eigen::ArrayXd exps = (logits.array() - max_logit).exp();
+    return (exps / exps.sum()).matrix();
 }
 
-inline double CategoricalCrossEntropy(const std::vector<double>& y_pred, const std::vector<double>& y_true) {
-    if (y_pred.size() != y_true.size() || y_pred.empty()) {
-        throw std::invalid_argument("CCE size mismatch.");
-    }
-    double loss = 0.0;
-    for (size_t i = 0; i < y_pred.size(); ++i) {
-        loss += -y_true[i] * std::log(clamp_prob(y_pred[i]));
-    }
-    return loss;
+inline LossFunction CategoricalCrossEntropy() {
+    return LossFunction(
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            if (y_pred.size() != y_true.size()) throw std::invalid_argument("CCE size mismatch.");
+            Eigen::ArrayXd p = clamp_prob(y_pred);
+            return -(y_true.array() * p.log()).sum(); // CCE typically sums over classes
+        },
+        [](const Eigen::MatrixXd& y_pred, const Eigen::MatrixXd& y_true) {
+            Eigen::ArrayXd p = clamp_prob(y_pred);
+            return -(y_true.array() / p).matrix();
+        },
+        "CategoricalCrossEntropy"
+    );
 }
 
-inline std::vector<double> CategoricalCrossEntropyGrad(const std::vector<double>& y_pred, const std::vector<double>& y_true) {
-    std::vector<double> grad(y_pred.size());
-    for (size_t i = 0; i < y_pred.size(); ++i) {
-        grad[i] = -y_true[i] / clamp_prob(y_pred[i]);
-    }
-    return grad;
+// Fused function to save calculating the Jacobian during backprop
+// Update the fused loss for batch processing
+inline LossFunction SoftmaxCrossEntropy() {
+    return LossFunction(
+        [](const Eigen::MatrixXd& logits, const Eigen::MatrixXd& y_true) {
+            if (logits.size() != y_true.size()) throw std::invalid_argument("Size mismatch.");
+            
+            // Get probabilities using our new batch-compliant Softmax
+            Eigen::MatrixXd probs = clamp_prob(activations::Softmax().forward(logits));
+            
+            // 1. Calculate CCE for each image independently
+            // (y_true * log(probs)) gives a [Batch x 10] matrix. 
+            // .rowwise().sum() squashes it to a [Batch x 1] vector of individual losses
+            Eigen::VectorXd sample_losses = -(y_true.array() * probs.array().log()).matrix().rowwise().sum();
+            
+            // 2. Return the mean loss across the entire batch
+            return sample_losses.mean();
+        },
+        [](const Eigen::MatrixXd& logits, const Eigen::MatrixXd& y_true) {
+            // Derivative remains beautifully simple: Preds - True (now natively 2D)
+            return activations::Softmax().forward(logits) - y_true;
+        },
+        "SoftmaxCrossEntropy"
+    );
 }
 
-inline double SoftmaxCrossEntropyWithLogits(const std::vector<double>& logits, const std::vector<double>& y_true) {
-    return CategoricalCrossEntropy(softmax(logits), y_true);
-}
+} // namespace losses
 
-inline std::vector<double> SoftmaxCrossEntropyWithLogitsGrad(const std::vector<double>& logits, const std::vector<double>& y_true) {
-    std::vector<double> probs = softmax(logits);
-    for (size_t i = 0; i < probs.size(); ++i) {
-        probs[i] -= y_true[i];
-    }
-    return probs;
-}
-
-}
-
-#endif
+#endif // LOSS_FUNC_H

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <random>
 #include <utility>
+#include <stdexcept>
 
 #include "activation_func.h"
 #include "loss_func.h"
@@ -17,8 +18,8 @@ namespace nn
         virtual ~BaseLayer() = default;
 
         // Core passes
-        virtual Eigen::VectorXd forward(const Eigen::VectorXd &input) = 0;
-        virtual Eigen::VectorXd backward(const Eigen::VectorXd &grad) = 0;
+        virtual Eigen::MatrixXd forward(const Eigen::MatrixXd &input) = 0;
+        virtual Eigen::MatrixXd backward(const Eigen::MatrixXd &grad) = 0;
 
         // Utilities
         virtual void set_training_mode(bool mode) = 0;
@@ -35,6 +36,7 @@ namespace nn
         virtual Eigen::VectorXd &get_bias() = 0;
         virtual Eigen::MatrixXd &get_dw() = 0;
         virtual Eigen::VectorXd &get_db() = 0;
+        virtual void zero_grad() { /* Do nothing by default */ }
         virtual ActivationFunction get_activation() const { return activations::Identity(); }
         virtual double get_dropout_rate() const { return 0.0; }
         virtual bool is_trainable() const { return true; }
@@ -46,9 +48,9 @@ namespace nn
     private:
         Eigen::MatrixXd weights;
         Eigen::VectorXd bias;
-        Eigen::VectorXd input;
-        Eigen::VectorXd output;
-        Eigen::VectorXd Z;
+        Eigen::MatrixXd input;
+        Eigen::MatrixXd output;
+        Eigen::MatrixXd Z;
 
         int input_dim;
         int output_dim;
@@ -57,33 +59,13 @@ namespace nn
         Eigen::VectorXd db;
         ActivationFunction acti;
 
-        double dropout_rate;
-        Eigen::VectorXd mask;
-        bool is_training;
         bool trainable;
 
-        // Optimized Shared Random Engine
-        static std::mt19937 &get_random_engine()
-        {
-            static std::random_device rd;
-            static std::mt19937 gen(rd());
-            return gen;
-        }
-
-        double get_bernoulli(double keep_prob)
-        {
-            std::bernoulli_distribution dist(keep_prob);
-            return dist(get_random_engine()) ? 1.0 : 0.0;
-        }
-
     public:
-        DenseLayer(int input_dim, int output_dim, ActivationFunction a, double dropout_rate = 0.0)
-            : acti(std::move(a)), input_dim(input_dim), output_dim(output_dim),
-              dropout_rate(dropout_rate), is_training(true), trainable(true)
+        DenseLayer(int input_dim, int output_dim, ActivationFunction a)
+            : acti(std::move(a)), input_dim(input_dim), output_dim(output_dim), trainable(true)
         {
-
             // Eigen Instant Initialization
-            // .Random() generates between -1 and 1. Multiplying by 0.1 scales it to [-0.1, 0.1]
             weights = Eigen::MatrixXd::Random(output_dim, input_dim) * 0.1;
             dw = Eigen::MatrixXd::Zero(output_dim, input_dim);
 
@@ -93,88 +75,80 @@ namespace nn
             input = Eigen::VectorXd::Zero(input_dim);
             output = Eigen::VectorXd::Zero(output_dim);
             Z = Eigen::VectorXd::Zero(output_dim);
-            mask = Eigen::VectorXd::Ones(output_dim);
         }
 
-        void set_training_mode(bool mode) { is_training = mode; }
-        double get_dropout_rate() const { return dropout_rate; }
+        // --- Core Passes ---
+        // Assuming 'acti' is an object of ActivationFunction
 
-        Eigen::VectorXd forward(const Eigen::VectorXd &in)
+      Eigen::MatrixXd forward(const Eigen::MatrixXd &in) override
         {
-            double keep_prob = 1.0 - dropout_rate;
             this->input = in;
 
-            // Pure Linear Algebra: Z = W * X + b
-            Z = (weights * input) + bias;
+            // Pure Linear Algebra: Z = X * W^T + b
+            // Use .rowwise() to add the bias vector to every row (image) in the batch
+            Z = (input * weights.transpose()).rowwise() + bias.transpose();
 
-            for (int i = 0; i < output_dim; i++)
-            {
-                output[i] = acti.activate(Z[i]);
+            // Apply vectorized activation to the entire batch matrix Z
+            output = acti.forward(Z);
 
-                if (dropout_rate > 0.0)
-                {
-                    if (is_training)
-                    {
-                        mask[i] = get_bernoulli(keep_prob);
-                        output[i] = (output[i] * mask[i]) / keep_prob;
-                    }
-                    else
-                    {
-                        mask[i] = 1.0; // Pass-through during inference
-                    }
-                }
-            }
             return output;
         }
 
-        Eigen::VectorXd backward(const Eigen::VectorXd &grad_output) override
+        Eigen::MatrixXd backward(const Eigen::MatrixXd &grad_output) override
         {
-            double keep_prob = 1.0 - dropout_rate;
-            Eigen::VectorXd current_grad_output = grad_output;
+            // 1. Calculate activation gradients (dZ) using Hadamard product (element-wise multiplication)
+            Eigen::MatrixXd act_grad = acti.backward(Z);
+            Eigen::MatrixXd dZ = grad_output.cwiseProduct(act_grad);
 
-            // 1. Apply dropout mask to incoming gradients
-            if (dropout_rate > 0.0 && is_training)
-            {
-                for (int i = 0; i < output_dim; ++i)
-                {
-                    current_grad_output[i] = (current_grad_output[i] * mask[i]) / keep_prob;
-                }
-            }
+            // 2. Calculate gradient to pass back to the previous layer
+            Eigen::MatrixXd grad_input = dZ * weights;
 
-            // 2. Calculate activation gradients into a local temporary vector (dZ)
-            Eigen::VectorXd dZ(output_dim);
-            for (int i = 0; i < output_dim; ++i)
-            {
-                dZ[i] = current_grad_output[i] * acti.grad(Z[i]);
-            }
-
-            // 3. Calculate gradient to pass back to the previous layer (ALWAYS happens)
-            Eigen::VectorXd grad_input = weights.transpose() * dZ;
-
-            // 4. Update the layer's own weights ONLY if it is not frozen
+            // 3. Update the layer's own gradients ONLY if it is trainable
+            // 3. Calculate layer gradients over the ENTIRE batch instantly
             if (trainable)
             {
-                db = dZ;
-                dw = dZ * input.transpose();
+                // dW = dZ^T * X
+                // dZ.T is [out_dim, N], input is [N, in_dim] -> Result: [out_dim, in_dim]
+                Eigen::MatrixXd current_dw = dZ.transpose() * input;
+
+                // db = Sum of dZ down the columns (over the batch dimension N)
+                // Result is a row vector [1, out_dim], so we transpose it back to [out_dim, 1]
+                Eigen::VectorXd current_db = dZ.colwise().sum().transpose();
+
+                // Accumulate (so it works seamlessly with your optimizer logic)
+                dw += current_dw;
+                db += current_db;
             }
 
             return grad_input;
         }
+        // --- Utilities ---
 
-        // Updated Getters returning Eigen types by reference
-        Eigen::MatrixXd &get_weights() { return this->weights; }
-        Eigen::VectorXd &get_bias() { return this->bias; }
-        Eigen::MatrixXd &get_dw() { return this->dw; }
-        Eigen::VectorXd &get_db() { return this->db; }
+        // Required to satisfy BaseLayer's pure virtual function,
+        // even though a purely mathematical DenseLayer ignores the training mode flag.
+        void set_training_mode(bool mode) override { /* Do nothing */ }
 
-        ActivationFunction get_activation() const { return this->acti; }
-        int get_input_dim() const { return this->input_dim; }
-        int get_output_dim() const { return this->output_dim; }
-
-        void set_trainable(bool t) { trainable = t; }
-        bool is_trainable() const { return trainable; }
-        bool has_parameters() const override { return true; }
+        int get_input_dim() const override { return input_dim; }
+        int get_output_dim() const override { return output_dim; }
         std::string get_name() const override { return "Dense"; }
+
+        // --- Weight Accessors ---
+        Eigen::MatrixXd &get_weights() override { return weights; }
+        Eigen::VectorXd &get_bias() override { return bias; }
+        Eigen::MatrixXd &get_dw() override { return dw; }
+        Eigen::VectorXd &get_db() override { return db; }
+
+        // --- Optional Overrides (Using default implementation signatures) ---
+        bool has_parameters() const override { return true; }
+        ActivationFunction get_activation() const override { return acti; }
+
+        bool is_trainable() const override { return trainable; }
+        void set_trainable(bool t) override { trainable = t; }
+        void zero_grad() override
+        {
+            dw.setZero();
+            db.setZero();
+        }
     };
 
     class DropoutLayer : public BaseLayer
@@ -182,7 +156,7 @@ namespace nn
     private:
         double rate;
         bool is_training = true;
-        Eigen::VectorXd binary_mask;
+        Eigen::MatrixXd binary_mask;
 
         // Dummy containers for the BaseLayer interface references
         Eigen::MatrixXd dummy_W;
@@ -209,37 +183,32 @@ namespace nn
         int get_output_dim() const override { return 0; } // Not applicable for Dropout
 
         // --- FORWARD PASS ---
-        Eigen::VectorXd forward(const Eigen::VectorXd &input) override
+        Eigen::MatrixXd forward(const Eigen::MatrixXd &input) override
         {
-            // If not training or rate is 0, pass data through untouched
             if (!is_training || rate == 0.0)
-            {
                 return input;
-            }
 
-            // Setup random number generator for Inverted Dropout
             static std::random_device rd;
             static std::mt19937 gen(rd());
-            std::bernoulli_distribution d(1.0 - rate); // Probability of KEEPING a neuron
+            std::bernoulli_distribution d(1.0 - rate);
 
-            binary_mask.resize(input.size());
-            for (int i = 0; i < input.size(); ++i)
+            // Generate a random mask for the entire batch matrix
+            binary_mask.resize(input.rows(), input.cols());
+            for (int i = 0; i < binary_mask.rows(); ++i)
             {
-                binary_mask(i) = d(gen) ? 1.0 : 0.0;
+                for (int j = 0; j < binary_mask.cols(); ++j)
+                {
+                    binary_mask(i, j) = d(gen) ? 1.0 : 0.0;
+                }
             }
 
-            // Scale by 1/(1-rate) during training so we don't have to scale during prediction
             return (input.cwiseProduct(binary_mask)) / (1.0 - rate);
         }
 
-        // --- BACKWARD PASS ---
-        Eigen::VectorXd backward(const Eigen::VectorXd &grad) override
+        Eigen::MatrixXd backward(const Eigen::MatrixXd &grad) override
         {
             if (!is_training || rate == 0.0)
-            {
                 return grad;
-            }
-            // Gradients only flow back through the neurons that were kept active
             return (grad.cwiseProduct(binary_mask)) / (1.0 - rate);
         }
 
@@ -248,6 +217,64 @@ namespace nn
         Eigen::VectorXd &get_bias() override { return dummy_b; }
         Eigen::MatrixXd &get_dw() override { return dummy_W; }
         Eigen::VectorXd &get_db() override { return dummy_b; }
+    };
+
+    // since this all the layers uses vectorxd so we actually doesn't need flatten but for shake of completeness i had created this.
+    class FlattenLayer : public BaseLayer
+    {
+    private:
+        int input_dim;
+        int output_dim;
+
+        // Dummy containers to safely return references if getters are accidentally called
+        Eigen::MatrixXd dummy_W;
+        Eigen::VectorXd dummy_b;
+
+    public:
+        // Constructor 1: If you know the 3D shape coming from a Conv Layer
+        FlattenLayer(int channels, int height, int width)
+        {
+            input_dim = channels * height * width;
+            output_dim = input_dim; // Flattening doesn't change total element count
+        }
+
+        // Constructor 2: If you just want to pass a flat size directly
+        FlattenLayer(int flat_size)
+        {
+            input_dim = flat_size;
+            output_dim = flat_size;
+        }
+
+        // --- Core Passes ---
+        // Since the BaseLayer pipeline already passes 1D Eigen::VectorXd arrays,
+        // Flatten just instantly passes the data forward to the Dense layer.
+        Eigen::MatrixXd forward(const Eigen::MatrixXd &in) override
+        {
+            return in;
+        }
+
+        Eigen::MatrixXd backward(const Eigen::MatrixXd &grad_output) override
+        {
+            return grad_output;
+        }
+
+        // --- Utilities ---
+        void set_training_mode(bool mode) override { /* Parameterless, do nothing */ }
+
+        int get_input_dim() const override { return input_dim; }
+        int get_output_dim() const override { return output_dim; }
+        std::string get_name() const override { return "Flatten"; }
+
+        // --- Weight Accessors ---
+        // We strictly declare this layer has NO parameters
+        bool has_parameters() const override { return false; }
+
+        // If the optimizer ignores has_parameters() and calls these anyway,
+        // throwing an error prevents a silent segmentation fault.
+        Eigen::MatrixXd &get_weights() override { throw std::runtime_error("Flatten has no weights"); }
+        Eigen::VectorXd &get_bias() override { throw std::runtime_error("Flatten has no biases"); }
+        Eigen::MatrixXd &get_dw() override { throw std::runtime_error("Flatten has no weights"); }
+        Eigen::VectorXd &get_db() override { throw std::runtime_error("Flatten has no biases"); }
     };
 
 }

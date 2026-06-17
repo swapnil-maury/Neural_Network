@@ -1,30 +1,33 @@
 import numpy as np
 from tensorflow.keras.datasets import mnist
-import os
 
-print("Downloading MNIST data...")
-(X_train, Y_train), (X_test, Y_test) = mnist.load_data()
+def export_mnist_to_bin():
+    print("Downloading MNIST...")
+    (x_train, y_train), (x_test, y_test) = mnist.load_data()
 
-print("Processing images...")
-# Flatten 28x28 images into 784-element arrays
-# Cast to float64 to perfectly match C++ 'double' (8 bytes)
-X_train = X_train.reshape(-1, 784).astype(np.float64) / 255.0
-X_test = X_test.reshape(-1, 784).astype(np.float64) / 255.0
+    # 1. Process X (Images)
+    # Flatten from (60000, 28, 28) to (60000, 784)
+    # Normalize to [0.0, 1.0]
+    # Cast to float64 (which matches C++ 'double')
+    x_train_flat = x_train.reshape(x_train.shape[0], -1).astype(np.float64) / 255.0
+    x_test_flat = x_test.reshape(x_test.shape[0], -1).astype(np.float64) / 255.0
 
-print("One-hot encoding labels...")
-# Convert labels (0-9) to 10-element arrays (e.g., 3 -> [0,0,0,1,0,0,0,0,0,0])
-Y_train_oh = np.zeros((Y_train.size, 10), dtype=np.float64)
-Y_train_oh[np.arange(Y_train.size), Y_train] = 1.0
+    # 2. Process Y (Labels)
+    # Convert to one-hot encoding (60000, 10)
+    # Cast to float64
+    num_classes = 10
+    y_train_onehot = np.eye(num_classes)[y_train].astype(np.float64)
+    y_test_onehot = np.eye(num_classes)[y_test].astype(np.float64)
 
-Y_test_oh = np.zeros((Y_test.size, 10), dtype=np.float64)
-Y_test_oh[np.arange(Y_test.size), Y_test] = 1.0
+    # 3. Save to raw binary files
+    print("Saving binary files...")
+    x_train_flat.tofile("train_X.bin")
+    y_train_onehot.tofile("train_Y.bin")
+    x_test_flat.tofile("test_X.bin")
+    y_test_onehot.tofile("test_Y.bin")
 
-print("Saving directly to raw binary files (.bin)...")
-# .tofile() dumps pure C-contiguous memory bytes. C++ will read this instantly!
-X_train.tofile("X_train.bin")
-Y_train_oh.tofile("Y_train.bin")
-X_test.tofile("X_test.bin")
-Y_test_oh.tofile("Y_test.bin")
+    print("Done! Files are ready for your C++ framework.")
+    print(f"Train X shape: {x_train_flat.shape}, Train Y shape: {y_train_onehot.shape}")
 
-print("Done! You now have 4 binary files ready for C++.")
-
+if __name__ == "__main__":
+    export_mnist_to_bin()

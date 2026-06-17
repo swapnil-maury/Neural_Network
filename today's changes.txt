@@ -1,23 +1,20 @@
-today's updates:
---------------------------------------------------------------------------------------
-1. adding the dropout 
-
-2. insertion of the layer at any index 
-
-3. for transfer learning there is one more parameter training so that this layer should freeze or not 
-
-tommorows updates
+todays updates
 -------------------------------------------------------------------------------------
-1. should be adding one feature which can take layers to be different type of layers mean cnn type of layers and other types of layers also so that i can add more type of layers in this 
+1. eigen implementation and multithreading using eigen library and improviing the logics of softmax and classification problems.
 
-2. normalization of the layer and fixing the normalization so that this full model should learn more and better in this normalization layer 
-    i will add the things like is some checks mean in starting there should be some parameters so that it would not learn mean if it is stationary for much time then just exit the program 
+2. true batch vectorization moving 1d vectors to 2d matrix so that the calculation can be done parallely on the cpu 
 
-3. after this all the things done then i will move towards eigen libraries as it is growing bigger and bigger and the mathmatical requirement is high so i have to optimize the performance also
+tommorows goal
+______________________________________________________________________________________
 
-4. 
+1.cnn and its some classes through which i can learn the images and improve most of the logics so that everything works properly
 
-// g++ -std=c++17 -I . -O3 -march=native program.cpp 
+2. finding bugs and improving the system 
+
+
+
+
+// g++ -std=c++17 -I . -O3 -march=native -fopenmp  mnist*.cpp
 
 /*
 # 1. Download the latest stable Eigen release (3.4.0)

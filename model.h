@@ -101,6 +101,8 @@ namespace nn
                 return activations::HardSigmoid();
             if (key == "hardswish")
                 return activations::HardSwish();
+            if (key == "softmax") // NEW FIX
+                return activations::Softmax();
             return activations::Identity();
         }
 
@@ -127,6 +129,8 @@ namespace nn
                 return losses::Poisson();
             if (key == "kldivergence" || key == "kl")
                 return losses::KLDivergence();
+            if (key == "categoricalcrossentropy" || key == "cce") // NEW FIX
+                return losses::SoftmaxCrossEntropy();
             return losses::MSE();
         }
 
@@ -165,9 +169,9 @@ namespace nn
             layers.push_back(std::make_unique<T>(std::move(layer_object)));
             optimizer.set_initialized(false);
         }
-        void add_dense_layer(int in_dim, int out_dim, ActivationFunction act, double dropout_rate = 0.0)
+        void add_dense_layer(int in_dim, int out_dim, ActivationFunction act)
         {
-            layers.push_back(std::make_unique<DenseLayer>(in_dim, out_dim, std::move(act), dropout_rate));
+            layers.push_back(std::make_unique<DenseLayer>(in_dim, out_dim, std::move(act)));
             optimizer.set_initialized(false);
         }
         template <typename T>
@@ -185,32 +189,27 @@ namespace nn
         }
 
         // EIGEN UPDATE: Maps standard vectors to Eigen vectors instantly
-        std::vector<double> forward(const std::vector<double> &input)
+       Eigen::MatrixXd forward(const Eigen::MatrixXd &input)
         {
-            Eigen::Map<const Eigen::VectorXd> in_eigen(input.data(), input.size());
-            Eigen::VectorXd out_eigen = in_eigen;
-
+            Eigen::MatrixXd out_eigen = input;
             for (auto &l : layers)
             {
-                out_eigen = l->forward(out_eigen); // Note the -> operator
+                out_eigen = l->forward(out_eigen);
             }
-
-            std::vector<double> out(out_eigen.data(), out_eigen.data() + out_eigen.size());
-            return out;
+            return out_eigen;
         }
 
-        void backward(const std::vector<double> &y_pred, const std::vector<double> &y_true)
+        // Pass the entire batch gradient backwards instantly
+        void backward(const Eigen::MatrixXd &y_pred, const Eigen::MatrixXd &y_true)
         {
-            std::vector<double> grad = loss.gradvec(y_pred, y_true);
-            Eigen::VectorXd current_grad = Eigen::Map<Eigen::VectorXd>(grad.data(), grad.size());
+            Eigen::MatrixXd current_grad = loss.compute_gradient(y_pred, y_true);
 
             for (int i = static_cast<int>(layers.size()) - 1; i >= 0; --i)
             {
-                current_grad = layers[i]->backward(current_grad); // Note the -> operator
+                current_grad = layers[i]->backward(current_grad);
             }
         }
-
-        void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vector<double>> &Y, int custom_batch_size = -1)
+void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vector<double>> &Y, int custom_batch_size = -1)
         {
             set_training_mode(true);
             int eff_batch = (custom_batch_size > 0) ? custom_batch_size : batch_size;
@@ -218,67 +217,74 @@ namespace nn
             for (int epoch = 0; epoch < epochs; ++epoch)
             {
                 double total_loss = 0.0;
+                
                 for (size_t b_start = 0; b_start < X.size(); b_start += eff_batch)
                 {
                     size_t b_end = std::min(X.size(), b_start + eff_batch);
                     size_t c_batch_size = b_end - b_start;
 
-                    std::vector<Eigen::MatrixXd> batch_dW(layers.size());
-                    std::vector<Eigen::VectorXd> batch_db(layers.size());
+                    // 1. Build the 2D Batch Matrices
+                    Eigen::MatrixXd X_batch(c_batch_size, X[0].size());
+                    Eigen::MatrixXd Y_batch(c_batch_size, Y[0].size());
 
-                    // 1. INIT ACCUMULATORS
-                    for (size_t l = 0; l < layers.size(); ++l)
-                    {
-                        if (layers[l]->has_parameters() && layers[l]->is_trainable())
-                        {
-                            batch_dW[l] = Eigen::MatrixXd::Zero(layers[l]->get_output_dim(), layers[l]->get_input_dim());
-                            batch_db[l] = Eigen::VectorXd::Zero(layers[l]->get_output_dim());
-                        }
+                    // Map the memory row-by-row into the batch matrix
+                    for (size_t i = 0; i < c_batch_size; ++i) {
+                        X_batch.row(i) = Eigen::Map<const Eigen::VectorXd>(X[b_start + i].data(), X[0].size());
+                        Y_batch.row(i) = Eigen::Map<const Eigen::VectorXd>(Y[b_start + i].data(), Y[0].size());
                     }
 
-                    for (size_t i = b_start; i < b_end; ++i)
-                    {
-                        std::vector<double> y_pred = forward(X[i]);
-                        total_loss += loss.lossvec(y_pred, Y[i]);
-                        backward(y_pred, Y[i]);
+                    // 2. Clear previous batch gradients
+                    for (auto &l : layers) { l->zero_grad(); }
 
-                        // 2. ACCUMULATE GRADS
-                        for (size_t l = 0; l < layers.size(); ++l)
-                        {
-                            if (layers[l]->has_parameters() && layers[l]->is_trainable())
-                            {
-                                batch_dW[l] += layers[l]->get_dw();
-                                batch_db[l] += layers[l]->get_db();
-                            }
-                        }
-                    }
+                    // 3. ONE FORWARD PASS for the entire batch
+                    Eigen::MatrixXd y_pred = forward(X_batch);
+                    
+                    // Accumulate total loss for reporting
+                    total_loss += loss.compute_loss(y_pred, Y_batch) * c_batch_size; 
 
+                    // 4. ONE BACKWARD PASS for the entire batch
+                    backward(y_pred, Y_batch);
+
+                    // 5. Average the accumulated layer gradients by batch size
                     double inv_batch = 1.0 / c_batch_size;
-
-                    // 3. APPLY AVERAGES
-                    for (size_t l = 0; l < layers.size(); ++l)
-                    {
-                        if (layers[l]->has_parameters() && layers[l]->is_trainable())
-                        {
-                            layers[l]->get_dw() = batch_dW[l] * inv_batch;
-                            layers[l]->get_db() = batch_db[l] * inv_batch;
+                    for (auto &l : layers) {
+                        if (l->has_parameters() && l->is_trainable()) {
+                            l->get_dw() *= inv_batch;
+                            l->get_db() *= inv_batch;
                         }
                     }
+
+                    // 6. Update Weights
                     optimizer.step(layers);
                 }
+                
                 if (epoch % (epochs / 10 + 1) == 0)
                 {
                     std::cout << "Epoch " << epoch << " | Loss: " << total_loss / X.size() << std::endl;
                 }
             }
         }
-        
-        std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> &X)
+
+std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> &X)
         {
             set_training_mode(false);
-            std::vector<std::vector<double>> preds;
-            for (const auto &x : X)
-                preds.push_back(forward(x));
+            
+            // Build the massive X matrix
+            Eigen::MatrixXd X_batch(X.size(), X[0].size());
+            for (size_t i = 0; i < X.size(); ++i) {
+                X_batch.row(i) = Eigen::Map<const Eigen::VectorXd>(X[i].data(), X[0].size());
+            }
+
+            // INSTANT FORWARD PASS for all test data
+            Eigen::MatrixXd out_eigen = forward(X_batch);
+
+            // Convert back to std::vector for user output
+            std::vector<std::vector<double>> preds(out_eigen.rows(), std::vector<double>(out_eigen.cols()));
+            for (int i = 0; i < out_eigen.rows(); ++i) {
+                Eigen::VectorXd row = out_eigen.row(i);
+                preds[i] = std::vector<double>(row.data(), row.data() + row.size());
+            }
+            
             set_training_mode(true);
             return preds;
         }
@@ -370,7 +376,7 @@ namespace nn
         out << "  {";
         for (size_t i = 0; i < layers.size(); ++i)
         {
-            out << "\"" << layers[i]->get_activation().name() << "\"" << (i + 1 < layers.size() ? ", " : "");
+            out << "\"" << layers[i]->get_activation().get_name() << "\"" << (i + 1 < layers.size() ? ", " : "");
         }
         out << "},\n";
 
@@ -383,7 +389,7 @@ namespace nn
         out << "},\n";
 
         // 5. Loss, Optimizer, and Params
-        out << "  \"" << loss.name() << "\",\n  \"" << optimizer.name << "\",\n  {";
+        out << "  \"" << loss.get_name() << "\",\n  \"" << optimizer.name << "\",\n  {";
         auto opt_params = optimizer.params();
         if (opt_params.empty())
             opt_params.push_back(optimizer.lr);
@@ -468,7 +474,7 @@ namespace nn
             // ROUTE 1: Dense Layers
             if (type == "Dense" || type == "dense")
             {
-                add_dense_layer(in_d, out_d, get_activation(act_name), d_rate);
+                add_dense_layer(in_d, out_d, get_activation(act_name));
 
                 // Only load weights if the layer actually expects them
                 if (layers.back()->has_parameters() && out_d > 0 && in_d > 0)
