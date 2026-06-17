@@ -56,8 +56,13 @@ void init(const std::vector<std::unique_ptr<BaseLayer>>& layers) {
             state_b[s].clear();
             for (const auto& l : layers) {
                 if (l->has_parameters()) {
-                    state_W[s].push_back(Eigen::MatrixXd::Zero(l->get_output_dim(), l->get_input_dim()));
-                    state_b[s].push_back(Eigen::VectorXd::Zero(l->get_output_dim()));
+                    // FIX: Copy the exact dimensions from the layer's actual matrices
+                    int w_rows = l->get_weights().rows();
+                    int w_cols = l->get_weights().cols();
+                    int b_size = l->get_bias().size();
+
+                    state_W[s].push_back(Eigen::MatrixXd::Zero(w_rows, w_cols));
+                    state_b[s].push_back(Eigen::VectorXd::Zero(b_size));
                 } else {
                     // Push empty matrices for parameterless layers
                     state_W[s].push_back(Eigen::MatrixXd(0, 0));

@@ -188,8 +188,29 @@ namespace nn
             optimizer.set_initialized(false);
         }
 
+        void delete_layer(int index)
+        {
+            // 1. Check if the index is valid
+            // Note: Unlike insert, you cannot delete at layers.size(), so it must be >=
+            if (index < 0 || index >= layers.size())
+            {
+                std::cerr << "Error: Invalid layer index for deletion!" << std::endl;
+                return;
+            }
+
+            // 2. Erase the layer
+            // Because you use std::unique_ptr, calling erase() automatically
+            // calls the layer's destructor and frees the memory on the heap!
+            layers.erase(layers.begin() + index);
+
+            // 3. Reset the optimizer
+            // The optimizer's momentum/velocity caches are now invalid, so it must reset.
+            optimizer.set_initialized(false);
+
+            std::cout << "Layer at index " << index << " successfully deleted." << std::endl;
+        }
         // EIGEN UPDATE: Maps standard vectors to Eigen vectors instantly
-       Eigen::MatrixXd forward(const Eigen::MatrixXd &input)
+        Eigen::MatrixXd forward(const Eigen::MatrixXd &input)
         {
             Eigen::MatrixXd out_eigen = input;
             for (auto &l : layers)
@@ -209,7 +230,7 @@ namespace nn
                 current_grad = layers[i]->backward(current_grad);
             }
         }
-void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vector<double>> &Y, int custom_batch_size = -1)
+        void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vector<double>> &Y, int custom_batch_size = -1)
         {
             set_training_mode(true);
             int eff_batch = (custom_batch_size > 0) ? custom_batch_size : batch_size;
@@ -217,7 +238,7 @@ void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vecto
             for (int epoch = 0; epoch < epochs; ++epoch)
             {
                 double total_loss = 0.0;
-                
+
                 for (size_t b_start = 0; b_start < X.size(); b_start += eff_batch)
                 {
                     size_t b_end = std::min(X.size(), b_start + eff_batch);
@@ -228,27 +249,33 @@ void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vecto
                     Eigen::MatrixXd Y_batch(c_batch_size, Y[0].size());
 
                     // Map the memory row-by-row into the batch matrix
-                    for (size_t i = 0; i < c_batch_size; ++i) {
+                    for (size_t i = 0; i < c_batch_size; ++i)
+                    {
                         X_batch.row(i) = Eigen::Map<const Eigen::VectorXd>(X[b_start + i].data(), X[0].size());
                         Y_batch.row(i) = Eigen::Map<const Eigen::VectorXd>(Y[b_start + i].data(), Y[0].size());
                     }
 
                     // 2. Clear previous batch gradients
-                    for (auto &l : layers) { l->zero_grad(); }
+                    for (auto &l : layers)
+                    {
+                        l->zero_grad();
+                    }
 
                     // 3. ONE FORWARD PASS for the entire batch
                     Eigen::MatrixXd y_pred = forward(X_batch);
-                    
+
                     // Accumulate total loss for reporting
-                    total_loss += loss.compute_loss(y_pred, Y_batch) * c_batch_size; 
+                    total_loss += loss.compute_loss(y_pred, Y_batch) * c_batch_size;
 
                     // 4. ONE BACKWARD PASS for the entire batch
                     backward(y_pred, Y_batch);
 
                     // 5. Average the accumulated layer gradients by batch size
                     double inv_batch = 1.0 / c_batch_size;
-                    for (auto &l : layers) {
-                        if (l->has_parameters() && l->is_trainable()) {
+                    for (auto &l : layers)
+                    {
+                        if (l->has_parameters() && l->is_trainable())
+                        {
                             l->get_dw() *= inv_batch;
                             l->get_db() *= inv_batch;
                         }
@@ -257,7 +284,7 @@ void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vecto
                     // 6. Update Weights
                     optimizer.step(layers);
                 }
-                
+
                 if (epoch % (epochs / 10 + 1) == 0)
                 {
                     std::cout << "Epoch " << epoch << " | Loss: " << total_loss / X.size() << std::endl;
@@ -265,13 +292,14 @@ void fit(const std::vector<std::vector<double>> &X, const std::vector<std::vecto
             }
         }
 
-std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> &X)
+        std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> &X)
         {
             set_training_mode(false);
-            
+
             // Build the massive X matrix
             Eigen::MatrixXd X_batch(X.size(), X[0].size());
-            for (size_t i = 0; i < X.size(); ++i) {
+            for (size_t i = 0; i < X.size(); ++i)
+            {
                 X_batch.row(i) = Eigen::Map<const Eigen::VectorXd>(X[i].data(), X[0].size());
             }
 
@@ -280,11 +308,12 @@ std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> 
 
             // Convert back to std::vector for user output
             std::vector<std::vector<double>> preds(out_eigen.rows(), std::vector<double>(out_eigen.cols()));
-            for (int i = 0; i < out_eigen.rows(); ++i) {
+            for (int i = 0; i < out_eigen.rows(); ++i)
+            {
                 Eigen::VectorXd row = out_eigen.row(i);
                 preds[i] = std::vector<double>(row.data(), row.data() + row.size());
             }
-            
+
             set_training_mode(true);
             return preds;
         }
@@ -450,7 +479,6 @@ std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> 
 
         out.close();
     }
-
     inline void SequentialNetwork::load_model(const ModelParams &p)
     {
         layers.clear();
@@ -465,9 +493,15 @@ std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> 
         {
             std::string type = p.layer_names[i];
 
-            // Safe bounds checking in case parameterless layers left these arrays empty
-            int out_d = (i < p.weights.size()) ? p.weights[i].size() : 0;
+            // --- THE FIX ---
+            // It is much safer to determine the layer's output dimension based on the BIAS vector.
+            // For Dense: bias is size [output_dim].
+            // For BN: beta (bias) is size [num_features].
+            int out_d = (i < p.biases.size()) ? p.biases[i].size() : 0;
+
+            // Input dimension still comes from the columns of the weight matrix (if it exists)
             int in_d = (i < p.weights.size() && !p.weights[i].empty()) ? p.weights[i][0].size() : 0;
+
             double d_rate = (i < p.dropout_rates.size()) ? p.dropout_rates[i] : 0.0;
             std::string act_name = (i < p.activations.size()) ? p.activations[i] : "identity";
 
@@ -496,6 +530,91 @@ std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> 
             {
                 layers.push_back(std::make_unique<DropoutLayer>(d_rate));
                 optimizer.set_initialized(false);
+            }
+            // ROUTE 3: Batch Normalization Layers
+            else if (type == "BatchNormalization" || type == "batchnormalization")
+            {
+                // Note: out_d represents num_features in BN layer
+                // Also, BN's weights (gamma) are stored as [1 x Features]
+                layers.push_back(std::make_unique<BatchNormalizationLayer>(out_d));
+                optimizer.set_initialized(false);
+
+                if (layers.back()->has_parameters() && out_d > 0)
+                {
+                    auto &W_eigen = layers.back()->get_weights(); // This is Gamma
+                    auto &b_eigen = layers.back()->get_bias();    // This is Beta
+
+                    // b_eigen is size [Features]
+                    for (int r = 0; r < out_d; ++r)
+                    {
+                        b_eigen(r) = p.biases[i][r];
+                    }
+
+                    // W_eigen (gamma) is size [1 x Features] in our implementation
+                    // But standard JSON structure might store it as [1][Features]
+                    if (!p.weights[i].empty())
+                    {
+                        for (int c = 0; c < out_d; ++c)
+                        {
+                            // Assuming it was saved as a 1-row matrix
+                            W_eigen(0, c) = p.weights[i][0][c];
+                        }
+                    }
+                }
+            }
+            // ROUTE 4: Layer Normalization Layers
+            else if (type == "LayerNormalization" || type == "layernormalization")
+            {
+                // Note: out_d represents num_features in the LayerNorm layer
+                layers.push_back(std::make_unique<LayerNormalizationLayer>(out_d));
+                optimizer.set_initialized(false);
+
+                if (layers.back()->has_parameters() && out_d > 0)
+                {
+                    auto &W_eigen = layers.back()->get_weights(); // This is Gamma [1 x Features]
+                    auto &b_eigen = layers.back()->get_bias();    // This is Beta [Features]
+
+                    // Load Beta (biases array is size [Features])
+                    for (int r = 0; r < out_d; ++r)
+                    {
+                        b_eigen(r) = p.biases[i][r];
+                    }
+
+                    // Load Gamma (weights array is 2D, but we only use the first row [0][Features])
+                    if (!p.weights[i].empty())
+                    {
+                        for (int c = 0; c < out_d; ++c)
+                        {
+                            W_eigen(0, c) = p.weights[i][0][c];
+                        }
+                    }
+                }
+            }
+
+            else if (type == "RMSNorm" || type == "rmsnorm")
+            {
+                // out_d correctly pulls the number of features based on the biases logic we fixed earlier
+                layers.push_back(std::make_unique<RMSNormalizationLayer>(out_d));
+                optimizer.set_initialized(false);
+
+                if (layers.back()->has_parameters() && out_d > 0)
+                {
+                    auto &W_eigen = layers.back()->get_weights(); // Gamma [1 x Features]
+                    auto &b_eigen = layers.back()->get_bias();    // Beta [Features]
+
+                    for (int r = 0; r < out_d; ++r)
+                    {
+                        b_eigen(r) = p.biases[i][r];
+                    }
+
+                    if (!p.weights[i].empty())
+                    {
+                        for (int c = 0; c < out_d; ++c)
+                        {
+                            W_eigen(0, c) = p.weights[i][0][c];
+                        }
+                    }
+                }
             }
             // FALLBACK
             else
