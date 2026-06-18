@@ -1,131 +1,641 @@
-## Loss Function Class
-Represents the loss function used to measure error between prediction and target.
+# Custom C++ Neural Network Framework
 
-**Attributes:**
-- name → name of the loss function
+A high-performance Deep Learning framework built entirely from scratch in modern C++17.
 
-**Functions:**
-- compute_loss(y_pred, y_true) → returns raw loss value for a single sample
-- derivative(y_pred, y_true) → returns raw gradient (dL/dy_pred)
-- lossvec(y_pred, y_true) → returns mean loss over a vector
-- gradvec(y_pred, y_true) → returns gradient vector
+Unlike educational implementations that model individual neurons and connections as separate objects, this framework is built around matrix algebra using Eigen, enabling efficient training, inference, and future GPU portability.
 
-**Mathematical Formulas:**
-- **MSE (Mean Squared Error):** 
-  - Loss L = (y_pred - y_true)²
-  - Derivative dL/dy_pred = 2 * (y_pred - y_true)
-- **MAE (Mean Absolute Error):**
-  - Loss L = |y_pred - y_true|
-  - Derivative dL/dy_pred = 1 if y_pred > y_true else -1
-- **Binary Cross Entropy:**
-  - Loss L = -(y_true * log(y_pred) + (1 - y_true) * log(1 - y_pred))
-  - Derivative dL/dy_pred = (y_pred - y_true) / (y_pred * (1 - y_pred))
+The framework supports Dense Neural Networks, Convolutional Neural Networks (CNNs), normalization layers, transfer learning, model serialization, custom losses, custom optimizers, OpenMP acceleration, and binary dataset pipelines.
 
-**Notes:**
-- No need for separate gradient for weights or bias in this class
-- Loss only provides gradient at the output layer
+---
 
+# 🚀 Key Features
 
-## Activation Function Class
-Represents activation applied to layer outputs to introduce non-linearity.
+* Matrix-first architecture
+* Dense Neural Networks
+* Convolutional Neural Networks (CNNs)
+* Batch Normalization
+* Layer Normalization
+* RMS Normalization (RMSNorm)
+* Dropout Regularization
+* Transfer Learning
+* Model Serialization
+* Binary Dataset Loading
+* OpenMP Multithreading
+* Eigen Matrix Backend
+* Custom Activations
+* Custom Loss Functions
+* Custom Optimizers
+* Multi-output Regression
+* Binary Classification
+* Multi-class Classification
+* Terminal Visualization Tools
+* Interactive Prediction Inspection
 
-**Attributes:**
-- name → name of activation function
+---
 
-**Functions:**
-- activate(x) → applies activation function
-- grad(x) → returns derivative of activation function
+# 🏗️ Supported Layers
 
+| Layer               | Supported |
+| ------------------- | --------- |
+| Dense Layer         | ✅         |
+| Conv2D Layer        | ✅         |
+| Flatten Layer       | ✅         |
+| Batch Normalization | ✅         |
+| Layer Normalization | ✅         |
+| RMS Normalization   | ✅         |
+| Dropout Layer       | ✅         |
+| Activation Layer    | ✅         |
 
-## Layer Class
-Represents a fully connected (dense) layer.
+---
 
-**Attributes:**
-- weights → matrix (output_size × input_size)
-- bias → vector (output_size)
-- input → stores input vector (used in backprop)
-- output → stores activated output
-- activation → activation function object
+## Dense Layers
 
-**Functions:**
+Features:
 
-### Forward
-- Z = W * X + b
-- A = activation(Z)
-- returns output
+* Fully connected feed-forward computation
+* Matrix-based forward propagation
+* Matrix-based backpropagation
+* Trainable parameters
+* Layer freezing support
+* Transfer learning support
 
-### Backward
-- delta = grad_output * activation_derivative
-- dW = delta ⊗ input
-- db = delta
-- W = W - learning_rate * dW
-- b = b - learning_rate * db
-- call the optimiser to update the weight and gradient
-- grad_input = Wᵀ * delta
+---
 
-**Notes:**
-- Gradients are computed during backward pass only
+## Convolutional Layers
 
-## optimizer
+Features:
 
-**Attributes:**
-- learning rate
-- beeta and epsilion 
-- it contain velocity and momentum variables
+* Multi-channel convolutions
+* Configurable kernel size
+* Configurable stride
+* Configurable padding
+* im2col acceleration
+* Spatial backpropagation
 
-**Function**
-- update( take gradient from the layer and update on teh basis of momentum and velocity)
+Example:
 
+```cpp
+model.add_layer(
+    nn::Conv2DLayer(
+        1,      // input channels
+        16,     // output channels
+        3,      // kernel size
+        1,      // stride
+        1,      // padding
+        28,     // input height
+        28      // input width
+    )
+);
+```
 
+---
 
-**NOTEs**
+## Normalization Layers
 
-- in some optimizer there is not need of velocity and moementum in that we define the object in such a way that there is no need of using velocity and momentun and this is uninitialised.
+Supported:
 
+* Batch Normalization
+* Layer Normalization
+* RMS Normalization (RMSNorm)
 
+Benefits:
 
+* Faster convergence
+* Improved gradient flow
+* More stable training
+* Better deep-network optimization
 
+---
 
-## Sequential Network Class
-Represents the neural network as a sequence of layers.
+## Regularization
 
-**Attributes:**
-- layers → list of layer objects
-- loss → loss function object
-- epochs → number of training iterations
-- learning rate 
-- optimizer
+### Dropout
 
-**Functions:**
-- add(layer)
-- forward(input)
-- backward(y_pred, y_true, learning_rate)(in this we have to backward propogate and update using optimiser and )
-- fit(x_train, y_train)
+Features:
 
+* Random neuron masking
+* Reduced overfitting
+* Automatic train/evaluation behavior
 
-## Perceptron Class (Not Recommended)
-Avoid perceptron-level design.
+Example:
 
-**Reasons:**
-- inefficient (one object per neuron)
-- difficult to scale
-- not suitable for matrix operations
-- not GPU-friendly
+```cpp
+model.add_layer(nn::DropoutLayer(0.2));
+```
 
-**Correct approach:**
-- use matrix-based layer design instead
+---
 
+# ⚡ Activation Functions
 
-## Key Design Principles
-- use matrix operations instead of individual neurons
-- compute gradients during backpropagation
-- keep components modular (loss, layer, activation, optimizer decoupled)
-- design system for future GPU support
+| Activation   | Supported |
+| ------------ | --------- |
+| Identity     | ✅         |
+| Binary Step  | ✅         |
+| Sigmoid      | ✅         |
+| Tanh         | ✅         |
+| ReLU         | ✅         |
+| ReLU6        | ✅         |
+| Leaky ReLU   | ✅         |
+| PReLU        | ✅         |
+| ELU          | ✅         |
+| SELU         | ✅         |
+| Softplus     | ✅         |
+| Softsign     | ✅         |
+| Swish        | ✅         |
+| SiLU         | ✅         |
+| GELU         | ✅         |
+| Mish         | ✅         |
+| Hard Sigmoid | ✅         |
+| Hard Swish   | ✅         |
+| Softmax      | ✅         |
 
+Parameterized activations:
 
-## Summary
-- loss → provides gradient at output
-- layer → handles forward, backward (calculates gradients)
-- activation → non-linearity and derivative
-- optimizer → updates weights based on gradients
-- sequential → manages training and batches
+* LeakyReLU
+* PReLU
+* ELU
+* SELU
+* Swish
+
+Example:
+
+```cpp
+activations::LeakyReLU(0.01);
+activations::PReLU(0.25);
+activations::Swish(1.0);
+```
+
+---
+
+# 📉 Loss Functions
+
+The framework uses a modular loss abstraction:
+
+```cpp
+LossFunction(
+    loss_function,
+    gradient_function,
+    "name"
+);
+```
+
+Loss functions are responsible for:
+
+* Computing scalar loss values
+* Computing output gradients
+
+Losses never update model parameters directly.
+
+---
+
+## Supported Loss Functions
+
+### Regression
+
+| Loss                                  | Supported |
+| ------------------------------------- | --------- |
+| Mean Squared Error (MSE)              | ✅         |
+| Mean Absolute Error (MAE)             | ✅         |
+| Huber Loss                            | ✅         |
+| Log-Cosh Loss                         | ✅         |
+| Mean Squared Logarithmic Error (MSLE) | ✅         |
+| Poisson Loss                          | ✅         |
+
+### Classification
+
+| Loss                             | Supported |
+| -------------------------------- | --------- |
+| Binary Cross Entropy             | ✅         |
+| Categorical Cross Entropy        | ✅         |
+| Softmax Cross Entropy            | ✅         |
+| Sparse Categorical Cross Entropy | ✅         |
+
+### Margin-Based
+
+| Loss               | Supported |
+| ------------------ | --------- |
+| Hinge Loss         | ✅         |
+| Squared Hinge Loss | ✅         |
+
+### Distribution-Based
+
+| Loss          | Supported |
+| ------------- | --------- |
+| KL Divergence | ✅         |
+
+---
+
+## Custom Loss Functions
+
+Custom objectives can be implemented without modifying framework internals:
+
+```cpp
+LossFunction custom_loss(
+    loss_fn,
+    gradient_fn,
+    "CustomLoss"
+);
+```
+
+---
+
+# ⚡ Optimizers
+
+The optimizer system is fully decoupled from layers and loss functions.
+
+Features:
+
+* Learning rate management
+* Internal optimizer states
+* Momentum buffers
+* Adaptive learning rates
+* Automatic state initialization
+
+---
+
+## Supported Optimizers
+
+| Optimizer    | Supported |
+| ------------ | --------- |
+| SGD          | ✅         |
+| Momentum SGD | ✅         |
+| RMSProp      | ✅         |
+| Adam         | ✅         |
+
+---
+
+## Optimizer State Management
+
+Optimizer states are automatically allocated according to layer dimensions.
+
+### Momentum
+
+Stores:
+
+* Velocity Weights
+* Velocity Biases
+
+### RMSProp
+
+Stores:
+
+* Running Gradient Squares
+
+### Adam
+
+Stores:
+
+* First Moment Estimates
+* Second Moment Estimates
+* Timestep Tracking
+
+---
+
+## Custom Optimizers
+
+Custom optimizers can be implemented through:
+
+```cpp
+Optimizer(
+    update_rule,
+    learning_rate,
+    state_count,
+    optimizer_name
+);
+```
+
+Potential extensions:
+
+* AdamW
+* AdaGrad
+* NAdam
+* Lion
+* LAMB
+
+---
+
+# 🎯 Supported Tasks
+
+## Regression
+
+Supports:
+
+* Single-output regression
+* Multi-output regression
+
+Metrics:
+
+* R² Score
+
+---
+
+## Binary Classification
+
+Typical setup:
+
+```cpp
+Sigmoid + BinaryCrossEntropy
+```
+
+---
+
+## Multi-Class Classification
+
+Typical setup:
+
+```cpp
+Softmax + SoftmaxCrossEntropy
+```
+
+Metrics:
+
+* Accuracy
+* Confusion Matrix
+
+---
+
+# 🔄 Transfer Learning
+
+Freeze previously trained layers while fine-tuning new layers.
+
+Example:
+
+```cpp
+for(auto& layer : model.get_layers())
+{
+    layer->set_trainable(false);
+}
+```
+
+Applications:
+
+* Domain adaptation
+* Feature reuse
+* Fine-tuning
+* Incremental learning
+
+---
+
+# 💾 Model Serialization
+
+Models can be exported directly into C++ source code.
+
+Save:
+
+```cpp
+model.save_model();
+```
+
+Load:
+
+```cpp
+model.load_model(model_param);
+```
+
+Benefits:
+
+* No external model files
+* Fast deployment
+* Easy distribution
+* Header-only model storage
+
+Generated file:
+
+```text
+output.h
+```
+
+---
+
+# 📂 Dataset Utilities
+
+Supported features:
+
+* Binary dataset loading
+* High-speed I/O
+* One-hot encoded labels
+* Large dataset support
+
+Example:
+
+```cpp
+auto X_train = load_X_bin("train_X.bin", 60000, 784);
+auto Y_train = load_Y_bin("train_Y.bin", 60000, 10);
+```
+
+---
+
+# 📊 Evaluation Metrics
+
+## Classification
+
+* Accuracy Score
+* Multiclass Accuracy
+* Confusion Matrix
+
+Example:
+
+```cpp
+accuracy_score_multiclass(...)
+confusion_matrix(...)
+```
+
+---
+
+## Regression
+
+* R² Score
+
+Example:
+
+```cpp
+r2_score(...)
+```
+
+---
+
+# 🖥️ Visualization & Debugging
+
+The framework includes command-line debugging and visualization tools.
+
+---
+
+## Terminal Image Visualization
+
+Render grayscale images directly inside the terminal using RGB ANSI colors.
+
+Example:
+
+```cpp
+printImage(image, 28, 28);
+```
+
+Features:
+
+* Grayscale rendering
+* MNIST visualization
+* Dataset inspection
+* Prediction debugging
+* No GUI dependencies
+
+---
+
+## Prediction Analysis
+
+Inspect:
+
+* Raw logits
+* Softmax probabilities
+* Predicted labels
+* Ground truth labels
+* Classification confidence
+
+---
+
+## Model Summary
+
+Generate architecture reports:
+
+```cpp
+model.summary();
+```
+
+Displays:
+
+* Layer types
+* Layer dimensions
+* Parameter dimensions
+* Trainable status
+* Network structure
+
+---
+
+# ⚙️ Performance
+
+The framework is optimized around matrix operations rather than neuron-level object graphs.
+
+Technologies:
+
+* Eigen 3.4
+* OpenMP
+* SIMD Vectorization
+* Batch Processing
+
+Benefits:
+
+* Faster training
+* Faster inference
+* Better cache locality
+* Reduced memory overhead
+* Future GPU portability
+
+Recommended build:
+
+```bash
+g++ -std=c++17 -O3 -march=native -fopenmp main.cpp
+```
+
+For large models:
+
+```bash
+ulimit -s unlimited && ./a.out
+```
+
+---
+
+# 🏛️ Design Philosophy
+
+This framework intentionally avoids neuron-level architectures.
+
+Avoided design:
+
+```text
+Neuron -> Object
+Connection -> Object
+Perceptron -> Object
+```
+
+Framework design:
+
+```text
+Input
+  ↓
+Layer
+  ↓
+Activation
+  ↓
+Loss
+  ↓
+Gradient
+  ↓
+Backpropagation
+  ↓
+Optimizer
+```
+
+Everything is computed using matrix algebra through Eigen.
+
+Advantages:
+
+* Cleaner implementation
+* Better scalability
+* Improved cache utilization
+* Easier maintenance
+* GPU-ready architecture
+
+---
+
+# 🔧 Extensibility
+
+The framework was designed to support custom components without modifying the training loop.
+
+Users can implement:
+
+* Custom Layers
+* Custom Activations
+* Custom Loss Functions
+* Custom Optimizers
+
+This enables experimentation while preserving the core infrastructure.
+
+---
+
+# 🚧 Roadmap
+
+### Completed
+
+* Dense Networks
+* CNN Foundations
+* Backpropagation
+* Batch Normalization
+* Layer Normalization
+* RMSNorm
+* Dropout
+* Transfer Learning
+* Model Serialization
+* OpenMP Parallelization
+* MNIST Support
+
+### In Progress
+
+* CNN Optimization
+* Additional Layer Types
+* Memory Optimizations
+* Serialization Improvements
+
+### Planned
+
+* CUDA Backend
+* GPU Acceleration
+* Learning Rate Scheduling
+* Checkpointing
+* Additional Optimizers
+* Residual Connections
+* Transformer Components
+* Mixed Precision Training
+
+---
+
+# 📜 License
+
+This project is intended for educational, research, and experimental deep-learning development in modern C++.

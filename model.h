@@ -2,7 +2,10 @@
 #define MODEL_H
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -26,7 +29,8 @@ namespace nn
         std::vector<std::vector<double>> biases;
         std::vector<std::string> activations;
         std::vector<double> dropout_rates;
-
+        std::vector<std::vector<int>> layer_hparams;
+        std::vector<std::vector<std::vector<double>>> layer_running_stats;
         std::string loss;
         std::string optimizer;
         std::vector<double> optimizer_params;
@@ -129,8 +133,11 @@ namespace nn
                 return losses::Poisson();
             if (key == "kldivergence" || key == "kl")
                 return losses::KLDivergence();
-            if (key == "categoricalcrossentropy" || key == "cce") // NEW FIX
+            if (key == "categoricalcrossentropy" || key == "cce")
+                return losses::CategoricalCrossEntropy();
+            if (key == "softmaxcrossentropy" || key == "softmaxce" || key == "sparsecategoricalcrossentropy")
                 return losses::SoftmaxCrossEntropy();
+            std::cerr << "[Warning] Unknown loss '" << name << "'. Falling back to MSE.\n";
             return losses::MSE();
         }
 
@@ -235,6 +242,16 @@ namespace nn
             set_training_mode(true);
             int eff_batch = (custom_batch_size > 0) ? custom_batch_size : batch_size;
 
+            if (!optimizer.is_initialized())
+            {
+                optimizer.set_timestep(0);
+                std::cout << "[Info] Optimizer uninitialized (Architecture changed or fresh model). Resetting states and clock to 0.\n";
+            }
+            else
+            {
+                std::cout << "[Info] Resuming trained model perfectly from Timestep: " << optimizer.get_timestep() << "\n";
+            }
+
             for (int epoch = 0; epoch < epochs; ++epoch)
             {
                 double total_loss = 0.0;
@@ -291,7 +308,6 @@ namespace nn
                 }
             }
         }
-
         std::vector<std::vector<double>> predict(const std::vector<std::vector<double>> &X)
         {
             set_training_mode(false);
@@ -331,12 +347,17 @@ namespace nn
 
     inline void SequentialNetwork::save_model(const std::string &filename) const
     {
-        std::ofstream out(filename);
+        const std::string tmp_filename = filename + ".tmp";
+        std::ofstream out(tmp_filename, std::ios::out | std::ios::trunc);
         if (!out.is_open())
         {
-            std::cerr << "Error: Could not open " << filename << " for writing.\n";
+            std::cerr << "Error: Could not open " << tmp_filename << " for writing: "
+                      << std::strerror(errno) << "\n";
             return;
         }
+
+        // CRITICAL FIX: Prevent float truncation to stop silent precision loss
+        out << std::setprecision(16) << std::scientific;
 
         int mod_in_dim = (input_dim > 0) ? input_dim : (layers.empty() ? -1 : layers.front()->get_input_dim());
 
@@ -373,7 +394,7 @@ namespace nn
             }
             else
             {
-                out << "    {}"; // Handle parameterless layers safely
+                out << "    {}";
             }
             out << (i + 1 < layers.size() ? ",\n" : "\n");
         }
@@ -395,7 +416,7 @@ namespace nn
             }
             else
             {
-                out << "    {}"; // Handle parameterless layers safely
+                out << "    {}";
             }
             out << (i + 1 < layers.size() ? ",\n" : "\n");
         }
@@ -416,6 +437,51 @@ namespace nn
             out << layers[i]->get_dropout_rate() << (i + 1 < layers.size() ? ", " : "");
         }
         out << "},\n";
+
+        // 4.5. Layer Hyperparameters (Essential for Conv2D and Flatten)
+        out << "  {\n";
+        for (size_t i = 0; i < layers.size(); ++i)
+        {
+            auto hparams = layers[i]->get_hyperparams();
+            if (hparams.empty())
+            {
+                out << "    {}";
+            }
+            else
+            {
+                out << "    {";
+                for (size_t j = 0; j < hparams.size(); ++j)
+                {
+                    out << hparams[j] << (j + 1 < hparams.size() ? ", " : "");
+                }
+                out << "}";
+            }
+            out << (i + 1 < layers.size() ? ",\n" : "\n");
+        }
+        out << "  },\n";
+
+        // ==========================================
+        // 4.6 NEW SECTION: Layer Running Stats
+        // ==========================================
+        out << "  {\n";
+        for (size_t i = 0; i < layers.size(); ++i) {
+            auto stats = layers[i]->get_running_stats();
+            if (stats.empty()) {
+                out << "    {}";
+            } else {
+                out << "    {";
+                for (size_t s = 0; s < stats.size(); ++s) {
+                    out << "{";
+                    for (int j = 0; j < stats[s].size(); ++j) {
+                        out << stats[s](j) << (j + 1 < stats[s].size() ? ", " : "");
+                    }
+                    out << "}" << (s + 1 < stats.size() ? ", " : "");
+                }
+                out << "}";
+            }
+            out << (i + 1 < layers.size() ? ",\n" : "\n");
+        }
+        out << "  },\n";
 
         // 5. Loss, Optimizer, and Params
         out << "  \"" << loss.get_name() << "\",\n  \"" << optimizer.name << "\",\n  {";
@@ -478,6 +544,28 @@ namespace nn
         out << "  " << (optimizer.is_initialized() ? "true" : "false") << "\n};\n\n#endif\n";
 
         out.close();
+        if (!out)
+        {
+            std::cerr << "Error: Failed while writing " << tmp_filename << ": "
+                      << std::strerror(errno) << "\n";
+            std::remove(tmp_filename.c_str());
+            return;
+        }
+
+        if (std::rename(tmp_filename.c_str(), filename.c_str()) != 0)
+        {
+            const int first_error = errno;
+            if (std::remove(filename.c_str()) != 0 ||
+                std::rename(tmp_filename.c_str(), filename.c_str()) != 0)
+            {
+                std::cerr << "Error: Could not replace " << filename << " with "
+                          << tmp_filename << ": " << std::strerror(first_error) << "\n";
+                return;
+            }
+        }
+
+        std::cout << "[Info] Model saved to " << filename
+                  << " at optimizer timestep " << optimizer.get_timestep() << ".\n";
     }
     inline void SequentialNetwork::load_model(const ModelParams &p)
     {
@@ -488,134 +576,202 @@ namespace nn
         loss = get_loss(p.loss);
         optimizer = get_optimizer(p.optimizer, p.optimizer_params);
 
-        // FACTORY UPDATE: Loop through layer_names, not weights
         for (size_t i = 0; i < p.layer_names.size(); ++i)
         {
             std::string type = p.layer_names[i];
 
-            // --- THE FIX ---
-            // It is much safer to determine the layer's output dimension based on the BIAS vector.
-            // For Dense: bias is size [output_dim].
-            // For BN: beta (bias) is size [num_features].
+            // Safely grab parameter sizes
             int out_d = (i < p.biases.size()) ? p.biases[i].size() : 0;
-
-            // Input dimension still comes from the columns of the weight matrix (if it exists)
-            int in_d = (i < p.weights.size() && !p.weights[i].empty()) ? p.weights[i][0].size() : 0;
-
             double d_rate = (i < p.dropout_rates.size()) ? p.dropout_rates[i] : 0.0;
             std::string act_name = (i < p.activations.size()) ? p.activations[i] : "identity";
+
+            int previous_valid_dim = input_dim;
+            for (int k = (int)layers.size() - 1; k >= 0; --k)
+            {
+                int d = layers[k]->get_output_dim();
+                if (d > 0)
+                {
+                    previous_valid_dim = d;
+                    break;
+                }
+            }
 
             // ROUTE 1: Dense Layers
             if (type == "Dense" || type == "dense")
             {
-                add_dense_layer(in_d, out_d, get_activation(act_name));
+                add_dense_layer(previous_valid_dim, out_d, get_activation(act_name));
 
-                // Only load weights if the layer actually expects them
-                if (layers.back()->has_parameters() && out_d > 0 && in_d > 0)
+                if (layers.back()->has_parameters() && out_d > 0)
                 {
                     auto &W_eigen = layers.back()->get_weights();
                     auto &b_eigen = layers.back()->get_bias();
-                    for (int r = 0; r < out_d; ++r)
+
+                    // Copy exactly to Eigen boundaries
+                    for (int r = 0; r < b_eigen.size(); ++r)
                     {
                         b_eigen(r) = p.biases[i][r];
-                        for (int c = 0; c < in_d; ++c)
+                    }
+
+                    if (!p.weights[i].empty())
+                    {
+                        for (int r = 0; r < W_eigen.rows(); ++r)
                         {
-                            W_eigen(r, c) = p.weights[i][r][c];
+                            for (int c = 0; c < W_eigen.cols(); ++c)
+                            {
+                                W_eigen(r, c) = p.weights[i][r][c];
+                            }
                         }
                     }
                 }
             }
-            // ROUTE 2: Dropout Layers (Parameterless)
+
+            // ROUTE 2: Dropout Layers
             else if (type == "Dropout" || type == "dropout")
             {
                 layers.push_back(std::make_unique<DropoutLayer>(d_rate));
                 optimizer.set_initialized(false);
             }
-            // ROUTE 3: Batch Normalization Layers
+
+            // ROUTE 3: Batch Normalization
             else if (type == "BatchNormalization" || type == "batchnormalization")
             {
-                // Note: out_d represents num_features in BN layer
-                // Also, BN's weights (gamma) are stored as [1 x Features]
                 layers.push_back(std::make_unique<BatchNormalizationLayer>(out_d));
                 optimizer.set_initialized(false);
 
                 if (layers.back()->has_parameters() && out_d > 0)
                 {
-                    auto &W_eigen = layers.back()->get_weights(); // This is Gamma
-                    auto &b_eigen = layers.back()->get_bias();    // This is Beta
+                    auto &W_eigen = layers.back()->get_weights();
+                    auto &b_eigen = layers.back()->get_bias();
 
-                    // b_eigen is size [Features]
                     for (int r = 0; r < out_d; ++r)
-                    {
                         b_eigen(r) = p.biases[i][r];
-                    }
 
-                    // W_eigen (gamma) is size [1 x Features] in our implementation
-                    // But standard JSON structure might store it as [1][Features]
                     if (!p.weights[i].empty())
                     {
                         for (int c = 0; c < out_d; ++c)
-                        {
-                            // Assuming it was saved as a 1-row matrix
                             W_eigen(0, c) = p.weights[i][0][c];
-                        }
                     }
                 }
+            
+                if (i < p.layer_running_stats.size() && !p.layer_running_stats[i].empty()) {
+                    std::vector<Eigen::VectorXd> loaded_stats;
+                    for (const auto& stat_vec : p.layer_running_stats[i]) {
+                        Eigen::VectorXd vec(stat_vec.size());
+                        for (size_t j = 0; j < stat_vec.size(); ++j) vec(j) = stat_vec[j];
+                        loaded_stats.push_back(vec);
+                    }
+                    layers.back()->set_running_stats(loaded_stats);
+                }
             }
-            // ROUTE 4: Layer Normalization Layers
+
+            // ROUTE 4: Layer Normalization
             else if (type == "LayerNormalization" || type == "layernormalization")
             {
-                // Note: out_d represents num_features in the LayerNorm layer
                 layers.push_back(std::make_unique<LayerNormalizationLayer>(out_d));
                 optimizer.set_initialized(false);
 
                 if (layers.back()->has_parameters() && out_d > 0)
                 {
-                    auto &W_eigen = layers.back()->get_weights(); // This is Gamma [1 x Features]
-                    auto &b_eigen = layers.back()->get_bias();    // This is Beta [Features]
+                    auto &W_eigen = layers.back()->get_weights();
+                    auto &b_eigen = layers.back()->get_bias();
 
-                    // Load Beta (biases array is size [Features])
                     for (int r = 0; r < out_d; ++r)
-                    {
                         b_eigen(r) = p.biases[i][r];
-                    }
 
-                    // Load Gamma (weights array is 2D, but we only use the first row [0][Features])
                     if (!p.weights[i].empty())
                     {
                         for (int c = 0; c < out_d; ++c)
-                        {
                             W_eigen(0, c) = p.weights[i][0][c];
-                        }
                     }
                 }
             }
 
+            // ROUTE 5: RMS Normalization
             else if (type == "RMSNorm" || type == "rmsnorm")
             {
-                // out_d correctly pulls the number of features based on the biases logic we fixed earlier
                 layers.push_back(std::make_unique<RMSNormalizationLayer>(out_d));
                 optimizer.set_initialized(false);
 
                 if (layers.back()->has_parameters() && out_d > 0)
                 {
-                    auto &W_eigen = layers.back()->get_weights(); // Gamma [1 x Features]
-                    auto &b_eigen = layers.back()->get_bias();    // Beta [Features]
+                    auto &W_eigen = layers.back()->get_weights();
+                    auto &b_eigen = layers.back()->get_bias();
 
                     for (int r = 0; r < out_d; ++r)
+                        b_eigen(r) = p.biases[i][r];
+
+                    if (!p.weights[i].empty())
+                    {
+                        for (int c = 0; c < out_d; ++c)
+                            W_eigen(0, c) = p.weights[i][0][c];
+                    }
+                }
+            }
+
+            // ROUTE 6: Conv2D Layers
+            else if (type == "Conv2D" || type == "conv2d")
+            {
+                if (p.layer_hparams[i].size() != 7)
+                {
+                    throw std::runtime_error("Corrupted Model File: Conv2D requires 7 hyperparameters.");
+                }
+
+                int in_c = p.layer_hparams[i][0];
+                int out_c = p.layer_hparams[i][1];
+                int k_size = p.layer_hparams[i][2];
+                int stride = p.layer_hparams[i][3];
+                int pad = p.layer_hparams[i][4];
+                int in_h = p.layer_hparams[i][5];
+                int in_w = p.layer_hparams[i][6];
+
+                layers.push_back(std::make_unique<Conv2DLayer>(in_c, out_c, k_size, stride, pad, in_h, in_w));
+                optimizer.set_initialized(false);
+
+                if (layers.back()->has_parameters())
+                {
+                    auto &W_eigen = layers.back()->get_weights();
+                    auto &b_eigen = layers.back()->get_bias();
+                    int fan_in = in_c * k_size * k_size;
+
+                    for (int r = 0; r < out_c; ++r)
                     {
                         b_eigen(r) = p.biases[i][r];
                     }
 
                     if (!p.weights[i].empty())
                     {
-                        for (int c = 0; c < out_d; ++c)
+                        for (int r = 0; r < out_c; ++r)
                         {
-                            W_eigen(0, c) = p.weights[i][0][c];
+                            for (int c = 0; c < fan_in; ++c)
+                            {
+                                W_eigen(r, c) = p.weights[i][r][c];
+                            }
                         }
                     }
                 }
             }
+
+            // ROUTE 7: Flatten Layers
+            else if (type == "Flatten" || type == "flatten")
+            {
+                if (!p.layer_hparams[i].empty())
+                {
+                    layers.push_back(std::make_unique<FlattenLayer>(p.layer_hparams[i][0]));
+                }
+                else
+                {
+                    int previous_out_dim = layers.back()->get_output_dim();
+                    layers.push_back(std::make_unique<FlattenLayer>(previous_out_dim));
+                }
+            }
+
+            // ROUTE 8: Standalone Activation Layers
+            else if (type == "ActivationLayer" || type == "activationlayer")
+            {
+                ActivationFunction act_fn = get_activation(act_name);
+                layers.push_back(std::make_unique<ActivationLayer>(act_fn));
+            }
+
             // FALLBACK
             else
             {
@@ -623,12 +779,12 @@ namespace nn
             }
         }
 
+        // Finalize Optimizer State
         optimizer.set_state_W(p.optimizer_state_W);
         optimizer.set_state_b(p.optimizer_state_b);
         optimizer.set_timestep(p.optimizer_timestep);
         optimizer.set_initialized(p.optimizer_initialized);
     }
-
     inline void SequentialNetwork::summary() const
     {
         std::cout << "Model: \"Sequential\"\n";

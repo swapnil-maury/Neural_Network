@@ -1,20 +1,21 @@
 todays updates
--------------------------------------------------------------------------------------
-1. eigen implementation and multithreading using eigen library and improviing the logics of softmax and classification problems.
+-------------------------------------------------------------------------
+1.cnn introduced but i don't understand fully about this cnn how im2col and other works so it will take me time to read through it and find the logics 
 
-2. true batch vectorization moving 1d vectors to 2d matrix so that the calculation can be done parallely on the cpu 
-
-tommorows goal
-______________________________________________________________________________________
-
-1.cnn and its some classes through which i can learn the images and improve most of the logics so that everything works properly
-
-2. finding bugs and improving the system 
-
-
-
+2.I think i should stop this for 2 to 3 days for understanding the cnn and other layers working properly i know the maths but full working is not actually 
+implemented by me so i should familarize with code.
 
 // g++ -std=c++17 -I . -O3 -march=native -fopenmp  mnist*.cpp
+
+// one more thing if the ./a.out is big file then you have to run using ulimit -s unlimited flag so that this will run properly without memory issue 
+
+// ulimit -s unlimited && ./a.out
+
+// one more thing i should clearify that you should recompile for the models to get retrained by the cpp since the model is compiled once so again recompiling 
+// the models parameters is reloaded to compiled a.out 
+
+// today i found some bugs and fixed that now everything is working properly but bugs are still there.
+
 
 /*
 # 1. Download the latest stable Eigen release (3.4.0)

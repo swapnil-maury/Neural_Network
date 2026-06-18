@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <omp.h> // Include OpenMP
-
+#include<chrono>
 // Prints the normalized image to the terminal
 #include "color.h" // Include your custom library
 
@@ -81,7 +81,7 @@ std::vector<double> apply_softmax(const std::vector<double>& logits) {
 int main() {
     int train_samples = 60000; 
     int test_samples  = 10000; 
-
+   auto program_start = std::chrono::high_resolution_clock::now();
     // Maximize OpenMP core usage
     Eigen::setNbThreads(10);
 
@@ -104,36 +104,56 @@ int main() {
     std::cout << "Building/Loading Model...\n";
     
     nn::SequentialNetwork model;
-    
-    // NOTE: You currently have model.load_model active. 
-    // If you want to train from scratch, comment out load_model and uncomment the build/fit lines.
-    model.load_model(model_param); 
-    model.delete_layer(4);
-    model.insert_layer(4,nn::RMSNormalizationLayer(64));
-
-    // model.insert_layer(4,nn::LayerNormalizationLayer(64));
-
-    // --- TO TRAIN FROM SCRATCH, USE THIS INSTEAD ---
+    model.load_model(model_param);
     // LossFunction loss_fn = losses::SoftmaxCrossEntropy();
-    // nn::Optimizer opt = nn::Adam(0.0003);
-    // int epochs = 100;
+    // nn::Optimizer opt = nn::Adam(0.0001); // Standard CNN learning rate
+    // int epochs = 10; // CNNs learn spatial features much faster than Dense networks
     
     // nn::SequentialNetwork model(loss_fn, opt, epochs);
-    // model.add_dense_layer(784, 128, activations::ReLU());
+
+    // model.add_layer(nn::Conv2DLayer(1, 16, 3, 1, 1, 28, 28)); 
+    // // Normalize the 12,544 features across each image instance right here:
+    // model.add_layer(nn::LayerNormalizationLayer(12544)); 
+    // model.add_layer(nn::ActivationLayer(activations::ReLU())); 
+
+    // // Layer 2
+    // model.add_layer(nn::Conv2DLayer(16, 32, 3, 2, 1, 28, 28)); 
+    // // Normalize the 6,272 features right before the flatten bottleneck:
+    // model.add_layer(nn::LayerNormalizationLayer(6272)); 
+    // model.add_layer(nn::ActivationLayer(activations::ReLU())); 
+    
+    // model.add_layer(nn::FlattenLayer(32, 14, 14));
+    
+    // // 3. Dense Hidden Layer
+    // // Compress the 6272 spatial features into 128 logical features
+    // model.add_dense_layer(6272, 128, activations::ReLU());
+    
+    // // 4. Dropout (Good practice to prevent overfitting)
     // model.add_layer(nn::DropoutLayer(0.2));
-    // model.add_dense_layer(128, 64, activations::ReLU());
     
-    // // Final layer MUST be identity for the fused loss
-    // model.add_dense_layer(64, 10, activations::Identity()); 
+    // // 5. Output Layer
+    // // 10 digits (0-9). Final layer MUST be Identity for fused SoftmaxCrossEntropy
+    // model.add_dense_layer(128, 10, activations::Identity());
     
-    // Train with large batch size
-    model.fit(X_train, Y_train, 256);
+    // model.set_epochs(10);
+    // Train with a standard CNN batch size
+    // model.fit(X_train, Y_train, 128);
     // -----------------------------------------------
 
     // 3. Predict on UNSEEN Test Data
     std::cout << "Switching to evaluation mode...\n";
     std::cout << "Making predictions on test data...\n";
     auto logits_preds = model.predict(X_test);
+
+    auto program_end = std::chrono::high_resolution_clock::now();
+
+    auto duration =
+        std::chrono::duration_cast<std::chrono::seconds>(
+            program_end - program_start);
+
+    std::cout << "\nTotal execution time: "
+              << duration.count() << " seconds\n";
+
 
     // Get true test classification accuracy
     double acc = accuracy_score_multiclass(Y_test, logits_preds);
@@ -146,50 +166,50 @@ int main() {
     print_confusion_matrix(conf_matrix);
     // -----------------------------------
     
-    // while(true) {
-    //     int image_number;
-    //     std::cout << "\nEnter an image index (0 to " << test_samples - 1 << ") to visualize (or -1 to exit): ";
-    //     std::cin >> image_number;
+    while(true) {
+        int image_number;
+        std::cout << "\nEnter an image index (0 to " << test_samples - 1 << ") to visualize (or -1 to exit): ";
+        std::cin >> image_number;
         
-    //     if(image_number < 0 || image_number >= test_samples) break;
+        if(image_number < 0 || image_number >= test_samples) break;
     
-    //     std::cout << "\n--- VISUALIZING TEST IMAGE [" << image_number << "] ---\n";
-    //     printImage(X_test[image_number], 28, 28);
-    //     std::cout << "\n--- PREDICTION VS ACTUAL ---\n";
+        std::cout << "\n--- VISUALIZING TEST IMAGE [" << image_number << "] ---\n";
+        printImage(X_test[image_number], 28, 28);
+        std::cout << "\n--- PREDICTION VS ACTUAL ---\n";
         
-    //     std::vector<double> probabilities = apply_softmax(logits_preds[image_number]);
+        std::vector<double> probabilities = apply_softmax(logits_preds[image_number]);
         
-    //     int predicted_digit = 0;
-    //     double max_prob = probabilities[0]; 
-    //     int true_digit = 0;
+        int predicted_digit = 0;
+        double max_prob = probabilities[0]; 
+        int true_digit = 0;
     
-    //     std::cout << "True Y_test[" << image_number << "] (One-Hot): ";
-    //     for(int i = 0; i < 10; i++) {
-    //         std::cout << Y_test[image_number][i] << " "; 
-    //         if (Y_test[image_number][i] == 1.0) {
-    //             true_digit = i;
-    //         }
-    //     }
-    //     std::cout << "\nActual Digit: " << true_digit << "\n\n";
+        std::cout << "True Y_test[" << image_number << "] (One-Hot): ";
+        for(int i = 0; i < 10; i++) {
+            std::cout << Y_test[image_number][i] << " "; 
+            if (Y_test[image_number][i] == 1.0) {
+                true_digit = i;
+            }
+        }
+        std::cout << "\nActual Digit: " << true_digit << "\n\n";
     
-    //     std::cout << "Model Predictions (Probabilities):\n";
-    //     for(int i = 0 ; i < 10; i++) {
-    //         std::cout << "Class " << i << ": " << std::fixed << std::setprecision(2) 
-    //                   << probabilities[i] * 100.0 << "%\n"; 
+        std::cout << "Model Predictions (Probabilities):\n";
+        for(int i = 0 ; i < 10; i++) {
+            std::cout << "Class " << i << ": " << std::fixed << std::setprecision(2) 
+                      << probabilities[i] * 100.0 << "%\n"; 
             
-    //         if (probabilities[i] > max_prob) {
-    //             max_prob = probabilities[i];
-    //             predicted_digit = i;
-    //         }
-    //     }
-    //     std::cout << "\nPredicted Digit: " << predicted_digit << "\n";
+            if (probabilities[i] > max_prob) {
+                max_prob = probabilities[i];
+                predicted_digit = i;
+            }
+        }
+        std::cout << "\nPredicted Digit: " << predicted_digit << "\n";
         
-    //     if (predicted_digit == true_digit) {
-    //         std::cout << "Result: CORRECT! 🎉\n";
-    //     } else {
-    //         std::cout << "Result: WRONG! ❌\n";
-    //     }
-    // }
+        if (predicted_digit == true_digit) {
+            std::cout << "Result: CORRECT! 🎉\n";
+        } else {
+            std::cout << "Result: WRONG! ❌\n";
+        }
+    }
 
     std::cout << "\nGenerating Model Summary...\n";
     // --- INTEGRATED MODEL SUMMARY ---
@@ -197,7 +217,7 @@ int main() {
     // --------------------------------
     
     // Save model to output.h before exiting
-    model.save_model("output.h"); 
+    // model.save_model("output.h"); 
 
 
     return 0;

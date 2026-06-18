@@ -3,6 +3,7 @@
 *.exe
 *.bin
 output.h
+*.keras
 
 # Jupyter
 .ipynb_checkpoints/

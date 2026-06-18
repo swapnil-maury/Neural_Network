@@ -41,6 +41,10 @@ namespace nn
         virtual double get_dropout_rate() const { return 0.0; }
         virtual bool is_trainable() const { return true; }
         virtual void set_trainable(bool trainable) { /* Do nothing by default */ }
+        virtual std::vector<int> get_hyperparams() const { return {}; }
+        // --- Non-Trainable State (For BatchNorm) ---
+        virtual std::vector<Eigen::VectorXd> get_running_stats() const { return {}; }
+        virtual void set_running_stats(const std::vector<Eigen::VectorXd>& stats) { /* Do nothing by default */ }
     };
 
     class DenseLayer : public BaseLayer
@@ -368,6 +372,18 @@ namespace nn
             dw.setZero();
             db.setZero();
         }
+        std::vector<Eigen::VectorXd> get_running_stats() const override {
+            // Convert our RowVectors into standard VectorXd for the framework
+            return {running_mean.transpose(), running_var.transpose()};
+        }
+
+        void set_running_stats(const std::vector<Eigen::VectorXd>& stats) override {
+            if (stats.size() == 2) {
+                // Convert the loaded VectorXd back into RowVectors
+                running_mean = stats[0].transpose();
+                running_var  = stats[1].transpose();
+            }
+        }
     };
 
     class LayerNormalizationLayer : public BaseLayer
@@ -606,7 +622,7 @@ namespace nn
             dw.setZero();
             db.setZero();
         }
-};
+    };
 
     // since this all the layers uses vectorxd so we actually doesn't need flatten but for shake of completeness i had created this.
     class FlattenLayer : public BaseLayer
@@ -666,5 +682,236 @@ namespace nn
         Eigen::VectorXd &get_db() override { throw std::runtime_error("Flatten has no biases"); }
     };
 
+    class Conv2DLayer : public BaseLayer
+    {
+    private:
+        int in_channels;
+        int out_channels;
+        int kernel_size;
+        int stride;
+        int padding;
+        int in_h, in_w;
+        int out_h, out_w;
+
+        Eigen::MatrixXd W; // Weights: (out_channels, in_channels * kernel_size * kernel_size)
+        Eigen::VectorXd b; // Biases: (out_channels)
+
+        Eigen::MatrixXd dW; // Gradient of weights
+        Eigen::VectorXd db; // Gradient of biases
+
+        // THE MISSING MEMBER: Stores the im2col matrix for each image in the batch
+        std::vector<Eigen::MatrixXd> col_caches;
+
+        // --- Helpers ---
+        Eigen::MatrixXd im2col(const Eigen::VectorXd &image)
+        {
+            int patch_size = in_channels * kernel_size * kernel_size;
+            int num_patches = out_h * out_w;
+            Eigen::MatrixXd col_matrix = Eigen::MatrixXd::Zero(patch_size, num_patches);
+
+            for (int ic = 0; ic < in_channels; ++ic)
+            {
+                for (int kh = 0; kh < kernel_size; ++kh)
+                {
+                    for (int kw = 0; kw < kernel_size; ++kw)
+                    {
+                        int row_idx = (ic * kernel_size * kernel_size) + (kh * kernel_size) + kw;
+                        for (int oh = 0; oh < out_h; ++oh)
+                        {
+                            for (int ow = 0; ow < out_w; ++ow)
+                            {
+                                int col_idx = oh * out_w + ow;
+                                int ih = oh * stride - padding + kh;
+                                int iw = ow * stride - padding + kw;
+
+                                if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
+                                {
+                                    int img_idx = (ic * in_h * in_w) + (ih * in_w) + iw;
+                                    col_matrix(row_idx, col_idx) = image(img_idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return col_matrix;
+        }
+
+        Eigen::VectorXd col2im(const Eigen::MatrixXd &col_matrix)
+        {
+            Eigen::VectorXd image = Eigen::VectorXd::Zero(in_channels * in_h * in_w);
+
+            for (int ic = 0; ic < in_channels; ++ic)
+            {
+                for (int kh = 0; kh < kernel_size; ++kh)
+                {
+                    for (int kw = 0; kw < kernel_size; ++kw)
+                    {
+                        int row_idx = (ic * kernel_size * kernel_size) + (kh * kernel_size) + kw;
+                        for (int oh = 0; oh < out_h; ++oh)
+                        {
+                            for (int ow = 0; ow < out_w; ++ow)
+                            {
+                                int col_idx = oh * out_w + ow;
+                                int ih = oh * stride - padding + kh;
+                                int iw = ow * stride - padding + kw;
+
+                                if (ih >= 0 && ih < in_h && iw >= 0 && iw < in_w)
+                                {
+                                    int img_idx = (ic * in_h * in_w) + (ih * in_w) + iw;
+                                    image(img_idx) += col_matrix(row_idx, col_idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return image;
+        }
+
+    public:
+        Conv2DLayer(int in_channels, int out_channels, int kernel_size, int stride, int padding, int in_h, int in_w)
+            : in_channels(in_channels), out_channels(out_channels), kernel_size(kernel_size),
+              stride(stride), padding(padding), in_h(in_h), in_w(in_w)
+        {
+            out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
+            out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
+
+            int fan_in = in_channels * kernel_size * kernel_size;
+            W = Eigen::MatrixXd::Random(out_channels, fan_in) * std::sqrt(2.0 / fan_in);
+            b = Eigen::VectorXd::Zero(out_channels);
+
+            dW = Eigen::MatrixXd::Zero(out_channels, fan_in);
+            db = Eigen::VectorXd::Zero(out_channels);
+        }
+
+        // --- Core Passes ---
+        Eigen::MatrixXd forward(const Eigen::MatrixXd &input) override
+        {
+            int batch_size = input.rows();
+            Eigen::MatrixXd output = Eigen::MatrixXd::Zero(batch_size, out_channels * out_h * out_w);
+
+            col_caches.clear();
+            col_caches.reserve(batch_size);
+
+            for (int n = 0; n < batch_size; ++n)
+            {
+                Eigen::MatrixXd X_col = im2col(input.row(n));
+                col_caches.push_back(X_col);
+
+                Eigen::MatrixXd out_col = W * X_col;
+                out_col.colwise() += b;
+
+                Eigen::RowVectorXd flat_out = Eigen::Map<Eigen::Matrix<double, 1, Eigen::Dynamic, Eigen::RowMajor>>(out_col.data(), out_col.size());
+                output.row(n) = flat_out;
+            }
+
+            return output;
+        }
+
+        Eigen::MatrixXd backward(const Eigen::MatrixXd &grad_output) override
+        {
+            int batch_size = grad_output.rows();
+            Eigen::MatrixXd grad_input = Eigen::MatrixXd::Zero(batch_size, in_channels * in_h * in_w);
+
+            zero_grad();
+
+            for (int n = 0; n < batch_size; ++n)
+            {
+                Eigen::MatrixXd d_out = Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(
+                    grad_output.row(n).data(), out_channels, out_h * out_w);
+
+                db += d_out.rowwise().sum();
+                dW += d_out * col_caches[n].transpose();
+
+                Eigen::MatrixXd dX_col = W.transpose() * d_out;
+                grad_input.row(n) = col2im(dX_col);
+            }
+
+            return grad_input;
+        }
+
+        // --- Utilities ---
+        void set_training_mode(bool mode) override {}
+        int get_input_dim() const override { return in_channels * in_h * in_w; }
+        int get_output_dim() const override { return out_channels * out_h * out_w; }
+        std::string get_name() const override { return "Conv2D"; }
+
+        // --- Weight Accessors ---
+        bool has_parameters() const override { return true; }
+        Eigen::MatrixXd &get_weights() override { return W; }
+        Eigen::VectorXd &get_bias() override { return b; }
+        Eigen::MatrixXd &get_dw() override { return dW; }
+        Eigen::VectorXd &get_db() override { return db; }
+
+        void zero_grad() override
+        {
+            dW.setZero();
+            db.setZero();
+        }
+        std::vector<int> get_hyperparams() const override
+        {
+            // We pack all the required constructor arguments into a single list
+            return {in_channels, out_channels, kernel_size, stride, padding, in_h, in_w};
+        }
+    };
+
+    class ActivationLayer : public BaseLayer
+    {
+    private:
+        ActivationFunction activation_fn;
+        Eigen::MatrixXd input_cache;
+
+        // Dummy containers for the BaseLayer interface references
+        Eigen::MatrixXd dummy_W;
+        Eigen::VectorXd dummy_b;
+
+    public:
+        // Constructor takes ONLY the activation function object
+        ActivationLayer(ActivationFunction act) : activation_fn(act) {}
+
+        // --- IDENTIFICATION ---
+        bool has_parameters() const override { return false; }
+
+        // Dynamically returns the name of whatever activation was passed in
+        std::string get_name() const override { return "ActivationLayer"; }
+
+        // We override this so the model saver knows exactly which activation is inside
+        ActivationFunction get_activation() const override { return activation_fn; }
+
+        // --- DIMENSIONS & MODES ---
+        void set_training_mode(bool mode) override { /* Parameterless */ }
+        int get_input_dim() const override { return 0; }
+        int get_output_dim() const override { return 0; }
+
+        // --- FORWARD PASS ---
+        Eigen::MatrixXd forward(const Eigen::MatrixXd &input) override
+        {
+            // Cache the input because the derivative usually requires it
+            input_cache = input;
+
+            // NOTE: Change ".forward" to whatever method your ActivationFunction uses
+            // to calculate the math (e.g., .apply(input) or .calculate(input))
+            return activation_fn.forward(input);
+        }
+
+        // --- BACKWARD PASS ---
+        Eigen::MatrixXd backward(const Eigen::MatrixXd &grad) override
+        {
+            // The backward pass of an activation is the incoming gradient multiplied
+            // element-wise by the derivative of the activation function.
+            // NOTE: Change ".backward" or ".derivative" to match your codebase.
+            Eigen::MatrixXd act_derivative = activation_fn.backward(input_cache);
+
+            return act_derivative.cwiseProduct(grad);
+        }
+
+        // --- PARAMETER GETTERS (Return empty dummies safely) ---
+        Eigen::MatrixXd &get_weights() override { return dummy_W; }
+        Eigen::VectorXd &get_bias() override { return dummy_b; }
+        Eigen::MatrixXd &get_dw() override { return dummy_W; }
+        Eigen::VectorXd &get_db() override { return dummy_b; }
+
+    };
 }
 #endif
