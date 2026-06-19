@@ -14,7 +14,7 @@
 
 #include "model.h"
 #include "run_score.h"
-#include "output.h"
+// #include "output.h"
 
 using namespace std;
 
@@ -83,7 +83,7 @@ int main() {
     int test_samples  = 10000; 
    auto program_start = std::chrono::high_resolution_clock::now();
     // Maximize OpenMP core usage
-    Eigen::setNbThreads(10);
+    // Eigen::setNbThreads(10);
 
     std::cout << "Loading data...\n";
     auto X_train = load_X_bin("train_X.bin", train_samples, 784);
@@ -104,22 +104,22 @@ int main() {
     std::cout << "Building/Loading Model...\n";
     
     nn::SequentialNetwork model;
-    model.load_model(model_param);
+    model.load_binary("model.bin");
     // LossFunction loss_fn = losses::SoftmaxCrossEntropy();
-    // nn::Optimizer opt = nn::Adam(0.0001); // Standard CNN learning rate
-    // int epochs = 10; // CNNs learn spatial features much faster than Dense networks
+    // nn::Optimizer opt = nn::Adam(0.0001);
+    // int epochs = 10;
     
     // nn::SequentialNetwork model(loss_fn, opt, epochs);
 
     // model.add_layer(nn::Conv2DLayer(1, 16, 3, 1, 1, 28, 28)); 
     // // Normalize the 12,544 features across each image instance right here:
-    // model.add_layer(nn::LayerNormalizationLayer(12544)); 
+    // // model.add_layer(nn::LayerNormalizationLayer(12544)); 
     // model.add_layer(nn::ActivationLayer(activations::ReLU())); 
 
     // // Layer 2
     // model.add_layer(nn::Conv2DLayer(16, 32, 3, 2, 1, 28, 28)); 
     // // Normalize the 6,272 features right before the flatten bottleneck:
-    // model.add_layer(nn::LayerNormalizationLayer(6272)); 
+    // // model.add_layer(nn::LayerNormalizationLayer(6272)); 
     // model.add_layer(nn::ActivationLayer(activations::ReLU())); 
     
     // model.add_layer(nn::FlattenLayer(32, 14, 14));
@@ -135,14 +135,15 @@ int main() {
     // // 10 digits (0-9). Final layer MUST be Identity for fused SoftmaxCrossEntropy
     // model.add_dense_layer(128, 10, activations::Identity());
     
-    // model.set_epochs(10);
-    // Train with a standard CNN batch size
-    // model.fit(X_train, Y_train, 128);
+    // // model.set_epochs(10);
+    // // Train with a standard CNN batch size
+    // model.fit_multi_threaded(X_train, Y_train, 32,10);
     // -----------------------------------------------
 
     // 3. Predict on UNSEEN Test Data
     std::cout << "Switching to evaluation mode...\n";
     std::cout << "Making predictions on test data...\n";
+    model.set_threads(10);
     auto logits_preds = model.predict(X_test);
 
     auto program_end = std::chrono::high_resolution_clock::now();
@@ -218,6 +219,7 @@ int main() {
     
     // Save model to output.h before exiting
     // model.save_model("output.h"); 
+    // model.save_binary();
 
 
     return 0;

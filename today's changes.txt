@@ -1,9 +1,9 @@
 todays updates
 -------------------------------------------------------------------------
-1.cnn introduced but i don't understand fully about this cnn how im2col and other works so it will take me time to read through it and find the logics 
-
-2.I think i should stop this for 2 to 3 days for understanding the cnn and other layers working properly i know the maths but full working is not actually 
-implemented by me so i should familarize with code.
+1. thread introducing as i cannot let the eigen decide what to do one more thing it will multiply a giant matrix using eigen but i think this will not be a 
+ good choice because it will slow down the memory copies between threads and sending instruction by eigen in place i created mutliple models and forwards pass and 
+ backward pass these models and their dw and db are calculated on these models and after some amount of time it will take optimizer to add the dw and db 
+ and so on this work is done and actually i recorded the time it will take significant less time 
 
 // g++ -std=c++17 -I . -O3 -march=native -fopenmp  mnist*.cpp
 
