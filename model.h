@@ -5,24 +5,23 @@
 #include <cerrno>
 #include <cctype>
 #include <cstdio>
-#include <cstring>
+#include <cstring> 
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <memory>
-#include <Eigen/Dense> // NEW: Eigen included here
+#include <Eigen/Dense>
 #include <iomanip>
 #include <thread>
 #include "Layers.h"
 #include "loss_func.h"
 #include "optimizer.h"
-#include <Eigen/Core> // Required for Eigen::setNbThreads
+#include <Eigen/Core>
 
 namespace nn
 {
 
-    // Data Structure remains std::vector so static initialization (output.h) still works natively
     struct ModelParams
     {
         std::vector<std::string> layer_names;
@@ -287,7 +286,7 @@ namespace nn
         }
 
         // CRITICAL FIX: Prevent float truncation to stop silent precision loss
-        out << std::setprecision(16) << std::scientific;
+        // out << std::setprecision(16) << std::scientific;
 
         int mod_in_dim = (input_dim > 0) ? input_dim : (layers.empty() ? -1 : layers.front()->get_input_dim());
 
@@ -1028,7 +1027,6 @@ namespace nn
             }
         }
     }
-
     inline void SequentialNetwork::save_binary(const std::string &filename) const
     {
         std::ofstream out(filename, std::ios::binary | std::ios::trunc);
@@ -1165,7 +1163,6 @@ namespace nn
         std::cout << "[Info] Model saved to binary format: " << filename
                   << " at timestep " << optimizer.get_timestep() << ".\n";
     }
-
     inline void SequentialNetwork::load_binary(const std::string &filename)
     {
         std::ifstream in(filename, std::ios::binary);

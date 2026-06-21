@@ -7,7 +7,43 @@ Unlike educational implementations that model individual neurons and connections
 The framework supports Dense Neural Networks, Convolutional Neural Networks (CNNs), normalization layers, transfer learning, model serialization, custom losses, custom optimizers, OpenMP acceleration, and binary dataset pipelines.
 
 ---
+# Dependencies
 
+This project uses **Eigen 3.4.0** as its primary linear algebra backend for efficient matrix and tensor operations.
+
+## Installing Eigen
+
+To automatically download and configure Eigen, execute the following command from the project root directory:
+
+```bash
+make eigen
+```
+
+This command will:
+
+* Download Eigen 3.4.0 from the official source.
+* Extract the required header files.
+* Create the `Eigen/` directory in the project root.
+* Remove temporary installation files after setup.
+
+After successful installation, the project structure will resemble:
+
+```text
+project/
+├── Eigen/
+│   ├── Core
+│   ├── Dense
+│   ├── LU
+│   ├── QR
+│   └── ...
+├── program.cpp
+├── Makefile
+└── ...
+```
+
+No additional configuration is required once the installation process completes successfully.
+
+---
 # 🚀 Key Features
 
 * Matrix-first architecture
@@ -622,17 +658,6 @@ This enables experimentation while preserving the core infrastructure.
 * Additional Layer Types
 * Memory Optimizations
 * Serialization Improvements
-
-### Planned
-
-* CUDA Backend
-* GPU Acceleration
-* Learning Rate Scheduling
-* Checkpointing
-* Additional Optimizers
-* Residual Connections
-* Transformer Components
-* Mixed Precision Training
 
 ---
 

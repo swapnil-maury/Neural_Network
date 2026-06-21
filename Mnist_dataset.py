@@ -5,16 +5,9 @@ def export_mnist_to_bin():
     print("Downloading MNIST...")
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
 
-    # 1. Process X (Images)
-    # Flatten from (60000, 28, 28) to (60000, 784)
-    # Normalize to [0.0, 1.0]
-    # Cast to float64 (which matches C++ 'double')
     x_train_flat = x_train.reshape(x_train.shape[0], -1).astype(np.float64) / 255.0
     x_test_flat = x_test.reshape(x_test.shape[0], -1).astype(np.float64) / 255.0
 
-    # 2. Process Y (Labels)
-    # Convert to one-hot encoding (60000, 10)
-    # Cast to float64
     num_classes = 10
     y_train_onehot = np.eye(num_classes)[y_train].astype(np.float64)
     y_test_onehot = np.eye(num_classes)[y_test].astype(np.float64)

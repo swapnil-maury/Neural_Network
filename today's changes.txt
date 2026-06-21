@@ -4,34 +4,3 @@ todays updates
  good choice because it will slow down the memory copies between threads and sending instruction by eigen in place i created mutliple models and forwards pass and 
  backward pass these models and their dw and db are calculated on these models and after some amount of time it will take optimizer to add the dw and db 
  and so on this work is done and actually i recorded the time it will take significant less time 
-
-// g++ -std=c++17 -I . -O3 -march=native -fopenmp  mnist*.cpp
-
-// one more thing if the ./a.out is big file then you have to run using ulimit -s unlimited flag so that this will run properly without memory issue 
-
-// ulimit -s unlimited && ./a.out
-
-// one more thing i should clearify that you should recompile for the models to get retrained by the cpp since the model is compiled once so again recompiling 
-// the models parameters is reloaded to compiled a.out 
-
-// today i found some bugs and fixed that now everything is working properly but bugs are still there.
-
-
-/*
-# 1. Download the latest stable Eigen release (3.4.0)
-curl -O https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
-
-# 2. Extract the archive
-tar -xzf eigen-3.4.0.tar.gz
-
-# 3. Move ONLY the core "Eigen" folder into your project directory
-mv eigen-3.4.0/Eigen ./Eigen
-
-# 4. Delete the massive extracted folder and the zip file to save space
-rm -rf eigen-3.4.0 eigen-3.4.0.tar.gz
-
-# 5. Verify it worked (Should print out a list of core header files)
-ls ./Eigen
-
-
-*/

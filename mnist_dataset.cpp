@@ -5,222 +5,203 @@
 #include <iomanip>
 #include <algorithm>
 #include <cmath>
-#include <omp.h> // Include OpenMP
-#include<chrono>
-// Prints the normalized image to the terminal
-#include "color.h" // Include your custom library
+#include <omp.h>
+#include <chrono>
 
-
-
+// my custom c++ header files
+#include "color.h"
 #include "model.h"
 #include "run_score.h"
-// #include "output.h"
 
 using namespace std;
 
-// Reads X data (Images)
-std::vector<std::vector<double>> load_X_bin(const std::string& filename, int samples, int features = 784) {
-    std::vector<std::vector<double>> data(samples, std::vector<double>(features));
-    std::ifstream in(filename, std::ios::binary);
-    if (!in) { std::cerr << "Could not open " << filename << "\n"; return data; }
-    
-    for (int i = 0; i < samples; ++i) {
-        in.read(reinterpret_cast<char*>(data[i].data()), features * sizeof(double));
+vector<vector<double>> load_X_bin(const string &filename, int samples, int features = 784)
+{
+    vector<vector<double>> data(samples, vector<double>(features));
+    ifstream in(filename, ios::binary);
+    if (!in)
+    {
+        cerr << "Could not open " << filename << "\n";
+        return data;
+    }
+
+    for (int i = 0; i < samples; ++i)
+    {
+        in.read(reinterpret_cast<char *>(data[i].data()), features * sizeof(double));
     }
     return data;
 }
 
-// Reads Y data (One-Hot Labels)
-std::vector<std::vector<double>> load_Y_bin(const std::string& filename, int samples, int classes = 10) {
-    std::vector<std::vector<double>> data(samples, std::vector<double>(classes));
-    std::ifstream in(filename, std::ios::binary);
-    if (!in) { std::cerr << "Could not open " << filename << "\n"; return data; }
-    
-    for (int i = 0; i < samples; ++i) {
-        in.read(reinterpret_cast<char*>(data[i].data()), classes * sizeof(double));
+vector<vector<double>> load_Y_bin(const string &filename, int samples, int classes = 10)
+{
+    vector<vector<double>> data(samples, vector<double>(classes));
+    ifstream in(filename, ios::binary);
+    if (!in)
+    {
+        cerr << "Could not open " << filename << "\n";
+        return data;
+    }
+
+    for (int i = 0; i < samples; ++i)
+    {
+        in.read(reinterpret_cast<char *>(data[i].data()), classes * sizeof(double));
     }
     return data;
 }
 
-void printImage(const std::vector<double>& image, int height, int width) {
-    for(int i = 0 ; i < height; i++) {
-        for(int j = 0 ; j < width; j++) {
+void printImage(const vector<double> &image, int height, int width)
+{
+    for (int i = 0; i < height; i++)
+    {
+        for (int j = 0; j < width; j++)
+        {
             double pixel_val = image[i * width + j];
-            
-            // 1. Clamp between 0.0 and 1.0
-            pixel_val = std::max(0.0, std::min(1.0, pixel_val));
-            
-            // 2. Convert to an 8-bit grayscale integer (0-255)
+            pixel_val = max(0.0, min(1.0, pixel_val));
             int val = static_cast<int>(pixel_val * 255.0);
-            
-            // 3. Format the background color string exactly as your library expects
-            std::string bg_color = "rgb(" + std::to_string(val) + "," + std::to_string(val) + "," + std::to_string(val) + ")";
-            
-            // 4. Use your library! 
-            // fg = "" (defaults to black), value = "  ", bg = bg_color
-            std::cout << terminal_color::color("", "  ", bg_color);
+            string bg_color = "rgb(" + to_string(val) + "," + to_string(val) + "," + to_string(val) + ")";
+            cout << terminal_color::color("", "  ", bg_color);
         }
-        std::cout << std::endl;
+        cout << endl;
     }
 }
 
-// Helper function to turn raw logits into readable probabilities for the visualization loop
-std::vector<double> apply_softmax(const std::vector<double>& logits) {
-    if (logits.empty()) return {};
-    double max_logit = *std::max_element(logits.begin(), logits.end());
-    std::vector<double> probs(logits.size());
+vector<double> apply_softmax(const vector<double> &logits)
+{
+    if (logits.empty())
+        return {};
+    double max_logit = *max_element(logits.begin(), logits.end());
+    vector<double> probs(logits.size());
     double sum = 0.0;
-    for (size_t i = 0; i < logits.size(); ++i) {
-        probs[i] = std::exp(logits[i] - max_logit);
+    for (size_t i = 0; i < logits.size(); ++i)
+    {
+        probs[i] = exp(logits[i] - max_logit);
         sum += probs[i];
     }
-    for (double& p : probs) p /= sum;
+    for (double &p : probs)
+        p /= sum;
     return probs;
 }
 
-int main() {
-    int train_samples = 60000; 
-    int test_samples  = 10000; 
-   auto program_start = std::chrono::high_resolution_clock::now();
-    // Maximize OpenMP core usage
-    // Eigen::setNbThreads(10);
+int main()
+{
+    int train_samples = 60000;
+    int test_samples = 10000;
+    auto program_start = chrono::high_resolution_clock::now();
 
-    std::cout << "Loading data...\n";
+    cout << "Loading data...\n";
     auto X_train = load_X_bin("train_X.bin", train_samples, 784);
     auto Y_train = load_Y_bin("train_Y.bin", train_samples, 10);
-    
+
     auto X_test = load_X_bin("test_X.bin", test_samples, 784);
     auto Y_test = load_Y_bin("test_Y.bin", test_samples, 10);
-    
-    // std::cout << "Normalizing data to 0.0 - 1.0...\n";
-    // for (auto& image : X_train) {
-    //     for (auto& pixel : image) pixel /= 255.0;
-    // }
-    // for (auto& image : X_test) {
-    //     for (auto& pixel : image) pixel /= 255.0;
-    // }
-    std::cout << "Data loaded completely!\n";
-    
-    std::cout << "Building/Loading Model...\n";
-    
-    nn::SequentialNetwork model;
-    model.load_binary("model.bin");
-    // LossFunction loss_fn = losses::SoftmaxCrossEntropy();
-    // nn::Optimizer opt = nn::Adam(0.0001);
-    // int epochs = 10;
-    
-    // nn::SequentialNetwork model(loss_fn, opt, epochs);
 
-    // model.add_layer(nn::Conv2DLayer(1, 16, 3, 1, 1, 28, 28)); 
-    // // Normalize the 12,544 features across each image instance right here:
-    // // model.add_layer(nn::LayerNormalizationLayer(12544)); 
-    // model.add_layer(nn::ActivationLayer(activations::ReLU())); 
+    cout << "Data loaded completely!\n";
 
-    // // Layer 2
-    // model.add_layer(nn::Conv2DLayer(16, 32, 3, 2, 1, 28, 28)); 
-    // // Normalize the 6,272 features right before the flatten bottleneck:
-    // // model.add_layer(nn::LayerNormalizationLayer(6272)); 
-    // model.add_layer(nn::ActivationLayer(activations::ReLU())); 
-    
-    // model.add_layer(nn::FlattenLayer(32, 14, 14));
-    
-    // // 3. Dense Hidden Layer
-    // // Compress the 6272 spatial features into 128 logical features
-    // model.add_dense_layer(6272, 128, activations::ReLU());
-    
-    // // 4. Dropout (Good practice to prevent overfitting)
-    // model.add_layer(nn::DropoutLayer(0.2));
-    
-    // // 5. Output Layer
-    // // 10 digits (0-9). Final layer MUST be Identity for fused SoftmaxCrossEntropy
-    // model.add_dense_layer(128, 10, activations::Identity());
-    
-    // // model.set_epochs(10);
-    // // Train with a standard CNN batch size
-    // model.fit_multi_threaded(X_train, Y_train, 32,10);
-    // -----------------------------------------------
+    cout << "Building/Loading Model...\n";
 
-    // 3. Predict on UNSEEN Test Data
-    std::cout << "Switching to evaluation mode...\n";
-    std::cout << "Making predictions on test data...\n";
+    // nn::SequentialNetwork model;
+    // model.load_binary("model.bin");
+    LossFunction loss = losses::SoftmaxCrossEntropy();
+    nn::Optimizer opt = nn::Adam(0.0008);
+    nn::SequentialNetwork model(loss, opt, 6);
+
+    ActivationFunction relu = activations::ReLU();
+
+    // Hidden Layers (Dropout pointer fixed!)
+    model.add_dense_layer(784, 128, relu);
+    model.add_dense_layer(128, 64, relu);
+
+    // Output Layer (10 digits)
+    model.add_dense_layer(64, 10, activations::Identity());
     model.set_threads(10);
+    model.fit(X_train, Y_train, 128);
+
+    // Predict
+
+    cout << "Switching to evaluation mode...\n";
+    cout << "Making predictions on test data...\n";
     auto logits_preds = model.predict(X_test);
 
-    auto program_end = std::chrono::high_resolution_clock::now();
+    auto program_end = chrono::high_resolution_clock::now();
 
     auto duration =
-        std::chrono::duration_cast<std::chrono::seconds>(
+        chrono::duration_cast<chrono::seconds>(
             program_end - program_start);
 
-    std::cout << "\nTotal execution time: "
-              << duration.count() << " seconds\n";
-
+    cout << "\nTotal execution time: "
+         << duration.count() << " seconds\n";
 
     // Get true test classification accuracy
     double acc = accuracy_score_multiclass(Y_test, logits_preds);
-    std::cout << "\n========================================\n";
-    std::cout << "Test Accuracy: " << acc * 100.0 << "%\n";
-    std::cout << "========================================\n";
-    
+    cout << "\n========================================\n";
+    cout << "Test Accuracy: " << acc * 100.0 << "%\n";
+    cout << "========================================\n";
+
     // --- INTEGRATED CONFUSION MATRIX ---
     auto conf_matrix = confusion_matrix(Y_test, logits_preds);
     print_confusion_matrix(conf_matrix);
     // -----------------------------------
-    
-    while(true) {
+
+    while (true)
+    {
         int image_number;
-        std::cout << "\nEnter an image index (0 to " << test_samples - 1 << ") to visualize (or -1 to exit): ";
-        std::cin >> image_number;
-        
-        if(image_number < 0 || image_number >= test_samples) break;
-    
-        std::cout << "\n--- VISUALIZING TEST IMAGE [" << image_number << "] ---\n";
+        cout << "\nEnter an image index (0 to " << test_samples - 1 << ") to visualize (or -1 to exit): ";
+        cin >> image_number;
+
+        if (image_number < 0 || image_number >= test_samples)
+            break;
+
+        cout << "\n--- VISUALIZING TEST IMAGE [" << image_number << "] ---\n";
         printImage(X_test[image_number], 28, 28);
-        std::cout << "\n--- PREDICTION VS ACTUAL ---\n";
-        
-        std::vector<double> probabilities = apply_softmax(logits_preds[image_number]);
-        
+        cout << "\n--- PREDICTION VS ACTUAL ---\n";
+
+        vector<double> probabilities = apply_softmax(logits_preds[image_number]);
+
         int predicted_digit = 0;
-        double max_prob = probabilities[0]; 
+        double max_prob = probabilities[0];
         int true_digit = 0;
-    
-        std::cout << "True Y_test[" << image_number << "] (One-Hot): ";
-        for(int i = 0; i < 10; i++) {
-            std::cout << Y_test[image_number][i] << " "; 
-            if (Y_test[image_number][i] == 1.0) {
+
+        cout << "True Y_test[" << image_number << "] (One-Hot): ";
+        for (int i = 0; i < 10; i++)
+        {
+            cout << Y_test[image_number][i] << " ";
+            if (Y_test[image_number][i] == 1.0)
+            {
                 true_digit = i;
             }
         }
-        std::cout << "\nActual Digit: " << true_digit << "\n\n";
-    
-        std::cout << "Model Predictions (Probabilities):\n";
-        for(int i = 0 ; i < 10; i++) {
-            std::cout << "Class " << i << ": " << std::fixed << std::setprecision(2) 
-                      << probabilities[i] * 100.0 << "%\n"; 
-            
-            if (probabilities[i] > max_prob) {
+        cout << "\nActual Digit: " << true_digit << "\n\n";
+
+        cout << "Model Predictions (Probabilities):\n";
+        for (int i = 0; i < 10; i++)
+        {
+            cout << "Class " << i << ": " << fixed << setprecision(2)
+                 << probabilities[i] * 100.0 << "%\n";
+
+            if (probabilities[i] > max_prob)
+            {
                 max_prob = probabilities[i];
                 predicted_digit = i;
             }
         }
-        std::cout << "\nPredicted Digit: " << predicted_digit << "\n";
-        
-        if (predicted_digit == true_digit) {
-            std::cout << "Result: CORRECT! 🎉\n";
-        } else {
-            std::cout << "Result: WRONG! ❌\n";
+        cout << "\nPredicted Digit: " << predicted_digit << "\n";
+
+        if (predicted_digit == true_digit)
+        {
+            cout << "Result: CORRECT! 🎉\n";
+        }
+        else
+        {
+            cout << "Result: WRONG! ❌\n";
         }
     }
 
-    std::cout << "\nGenerating Model Summary...\n";
-    // --- INTEGRATED MODEL SUMMARY ---
+    cout << "\nGenerating Model Summary...\n";
     model.summary();
-    // --------------------------------
-    
-    // Save model to output.h before exiting
-    // model.save_model("output.h"); 
-    // model.save_binary();
 
+    // Save model to output.h before exiting
+    // model.save_model("output.h");
+    // model.save_binary();
 
     return 0;
 }

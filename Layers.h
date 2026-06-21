@@ -29,7 +29,7 @@ namespace nn
         virtual std::string get_name() const = 0;
 
         // Weight accessors (Crucial for the Optimizer)
-        // We add a check because some layers (like Dropout or MaxPool) don't have weights.
+        // We add a check because some layers (like Dropout) don't have weights.
         virtual bool has_parameters() const { return false; }
 
         // These should throw an error or return dummy data if called on a parameter-free layer
@@ -265,9 +265,6 @@ namespace nn
             return cloned_layer;
         }
     };
-    // i have to implement one more thing as batchnormalizationlayer will cancel out the biases so if we just at compile time just said
-    // the denselayer to just stop making track or remove the biases from this denselayer then you will save thousands of calculation
-    // and this will works and one more thing batch normalization should not palced before or after the dropout layer as it will cause variance and everything random so they are just fighting each other
 
     class BatchNormalizationLayer : public BaseLayer
     {
@@ -680,10 +677,6 @@ namespace nn
             input_dim = flat_size;
             output_dim = flat_size;
         }
-
-        // --- Core Passes ---
-        // Since the BaseLayer pipeline already passes 1D Eigen::VectorXd arrays,
-        // Flatten just instantly passes the data forward to the Dense layer.
         Eigen::MatrixXd forward(const Eigen::MatrixXd &in) override
         {
             return in;
@@ -984,20 +977,13 @@ namespace nn
         {
             // Cache the input because the derivative usually requires it
             input_cache = input;
-
-            // NOTE: Change ".forward" to whatever method your ActivationFunction uses
-            // to calculate the math (e.g., .apply(input) or .calculate(input))
             return activation_fn.forward(input);
         }
 
         // --- BACKWARD PASS ---
         Eigen::MatrixXd backward(const Eigen::MatrixXd &grad) override
         {
-            // The backward pass of an activation is the incoming gradient multiplied
-            // element-wise by the derivative of the activation function.
-            // NOTE: Change ".backward" or ".derivative" to match your codebase.
             Eigen::MatrixXd act_derivative = activation_fn.backward(input_cache);
-
             return act_derivative.cwiseProduct(grad);
         }
 
